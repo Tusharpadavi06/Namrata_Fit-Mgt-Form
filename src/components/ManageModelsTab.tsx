@@ -1,23 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase';
+import React, { useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Plus, Trash2, UserPlus, Loader2, Info } from 'lucide-react';
+import { Plus, Trash2, UserPlus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-
-interface Model {
-  id: string;
-  name: string;
-  email: string;
-}
+import { Model, addModelToPool, deleteModelFromPool } from '../lib/models-service';
 
 interface ManageModelsTabProps {
   modelPool: Model[];
   loadingModels: boolean;
-  onModelsChange: (updatedData?: any[]) => void | Promise<void>;
+  onModelsChange: (updatedData?: Model[]) => void | Promise<void>;
 }
 
 export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: ManageModelsTabProps) {
@@ -28,71 +21,24 @@ export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: Ma
 
   const handleAddModel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName || !newEmail) return;
+    if (!newName.trim() || !newEmail.trim()) return;
     
     setSubmitting(true);
     const toastId = toast.loading('Adding model to pool...');
     
-    const isCryptoAvailable = typeof crypto !== 'undefined';
-    const tempId = (isCryptoAvailable && crypto.randomUUID) 
-      ? crypto.randomUUID() 
-      : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      
-    const newModel: Model = { 
-      id: tempId,
-      name: newName.trim(), 
-      email: newEmail.trim().toLowerCase() 
-    };
-
     try {
-      // 1. Optimistically update local cache and show success
-      const currentCacheStr = localStorage.getItem('model_pool_cache');
-      let currentCache: Model[] = currentCacheStr ? JSON.parse(currentCacheStr) : [...modelPool];
-      
-      // Filter out duplicate emails locally
-      if (!currentCache.some((m: any) => m.email.toLowerCase() === newModel.email.toLowerCase())) {
-        currentCache.push(newModel);
-        currentCache.sort((a, b) => a.name.localeCompare(b.name));
-        localStorage.setItem('model_pool_cache', JSON.stringify(currentCache));
+      const result = await addModelToPool(newName, newEmail);
+      if (!result.success) {
+        toast.error(result.message || 'Failed to add model', { id: toastId });
+      } else {
+        setNewName('');
+        setNewEmail('');
+        onModelsChange(result.models);
+        toast.success(`Model "${newName.trim()}" added successfully`, { id: toastId });
       }
-
-      setNewName('');
-      setNewEmail('');
-      
-      // Update UI state immediately
-      onModelsChange(currentCache);
-
-      // 2. Try to save to Supabase database in background
-      const { data, error } = await supabase
-        .from('models')
-        .insert([{ 
-          name: newModel.name, 
-          email: newModel.email 
-        }])
-        .select();
-
-      if (error) {
-        if (error.code === '23505') {
-          console.warn('A model with this email already exists in database.');
-        } else {
-          console.error("Database insert error details:", error);
-        }
-      } else if (data && data[0]) {
-        // If DB returned a different auto-ID, we update our local state with DB ID
-        const dbModel = data[0];
-        const latestCacheStr = localStorage.getItem('model_pool_cache');
-        if (latestCacheStr) {
-          let latestCache: Model[] = JSON.parse(latestCacheStr);
-          latestCache = latestCache.map(m => m.id === tempId ? { ...m, id: dbModel.id } : m);
-          localStorage.setItem('model_pool_cache', JSON.stringify(latestCache));
-          onModelsChange(latestCache);
-        }
-      }
-
-      toast.success(`Model "${newModel.name}" added successfully`, { id: toastId });
     } catch (error: any) {
-      console.warn("Database insert failed (using local fallback):", error.message);
-      toast.success(`Model "${newModel.name}" added locally`, { id: toastId });
+      console.warn("Failed to add model:", error);
+      toast.error('Failed to add model', { id: toastId });
     } finally {
       setSubmitting(false);
     }
@@ -100,47 +46,15 @@ export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: Ma
 
   const handleDelete = async (id: string) => {
     try {
-      // 1. Optimistically remove from local storage cache immediately
-      const currentCacheStr = localStorage.getItem('model_pool_cache');
-      let currentCache: Model[] = currentCacheStr ? JSON.parse(currentCacheStr) : [...modelPool];
-      currentCache = currentCache.filter((m: any) => m.id !== id);
-      localStorage.setItem('model_pool_cache', JSON.stringify(currentCache));
-      
-      // Update UI state immediately
-      onModelsChange(currentCache);
-      toast.success('Model removed');
-
-      // 2. Try to delete in Supabase database in background
-      const { error } = await supabase
-        .from('models')
-        .delete()
-        .eq('id', id);
-      
-      if (error) {
-        console.warn("Supabase delete failed (already deleted locally or permission issue):", error.message);
-      }
+      const targetModel = modelPool.find(m => m.id === id);
+      const result = await deleteModelFromPool(id, targetModel?.email);
+      onModelsChange(result.models);
+      toast.success('Model removed successfully');
     } catch (error: any) {
-      console.warn("Delete database exception:", error.message);
+      console.warn("Delete exception:", error);
+      toast.error('Failed to remove model');
     }
   };
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return (
-      <div className="max-w-2xl mx-auto p-4">
-        <Card className="border-destructive/50 bg-destructive/5">
-          <CardHeader>
-            <CardTitle className="text-destructive flex items-center gap-2">
-              <Info className="w-5 h-5" />
-              Configuration Missing
-            </CardTitle>
-            <CardDescription>
-              Supabase credentials are not set. Please add <strong>VITE_SUPABASE_URL</strong> and <strong>VITE_SUPABASE_ANON_KEY</strong> to your environment variables.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6 max-w-full mx-auto pb-10">

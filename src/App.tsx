@@ -14,12 +14,13 @@ import { HistoryTab } from './components/HistoryTab';
 import { ModelResponseView } from './components/ModelResponseView';
 import { Toaster } from './components/ui/sonner';
 import { supabase } from './lib/supabase';
+import { fetchAllModels, getLocalModels, setLocalModels } from './lib/models-service';
 import headerBannerImg from './assets/images/lingerie_survey_header_1785743995198.jpg';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('form');
-  const [modelPool, setModelPool] = useState<any[]>([]);
-  const [loadingModels, setLoadingModels] = useState(true);
+  const [modelPool, setModelPool] = useState<any[]>(() => getLocalModels());
+  const [loadingModels, setLoadingModels] = useState(false);
   const [urlVersion, setUrlVersion] = useState(0);
 
   // Function to handle navigating to edit a submission
@@ -38,36 +39,18 @@ export default function App() {
     setActiveTab('form');
   };
 
-  // Fetch model pool once at app level with local cache
+  // Fetch model pool once at app level with local cache sync
   const fetchModelPool = async (updatedData?: any[]) => {
     if (updatedData && Array.isArray(updatedData)) {
       setModelPool(updatedData);
-      localStorage.setItem('model_pool_cache', JSON.stringify(updatedData));
+      setLocalModels(updatedData);
       setLoadingModels(false);
       return;
     }
 
     try {
-      // Check cache first (only on initial load if modelPool is empty)
-      if (modelPool.length === 0) {
-        const cached = localStorage.getItem('model_pool_cache');
-        if (cached) {
-          setModelPool(JSON.parse(cached));
-          setLoadingModels(false);
-        }
-      }
-
-      const { data, error } = await supabase
-        .from('models')
-        .select('id, name, email')
-        .order('name');
-      
-      if (error) throw error;
-      
-      if (data) {
-        setModelPool(data);
-        localStorage.setItem('model_pool_cache', JSON.stringify(data));
-      }
+      const models = await fetchAllModels();
+      setModelPool(models);
     } catch (error) {
       console.error("Error fetching models at App level:", error);
     } finally {
