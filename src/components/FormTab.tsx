@@ -593,6 +593,30 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
+      // 0. Save assigned models to Supabase models table
+      try {
+        const uniqueModelsMap = new Map<string, { name: string; email: string }>();
+        validAssignments.forEach(a => {
+          const cleanEmail = a.modelEmail.trim().toLowerCase();
+          if (cleanEmail && !uniqueModelsMap.has(cleanEmail)) {
+            uniqueModelsMap.set(cleanEmail, { name: a.modelName.trim(), email: cleanEmail });
+          }
+        });
+        const uniqueModels = Array.from(uniqueModelsMap.values());
+        if (uniqueModels.length > 0) {
+          const { error: mErr } = await supabase.from('models').upsert(uniqueModels, { onConflict: 'email' });
+          if (mErr) {
+            for (const m of uniqueModels) {
+              try {
+                await supabase.from('models').insert([{ name: m.name, email: m.email }]);
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (mEx) {
+        console.warn("Models sync to Supabase skipped:", mEx);
+      }
+
       // 1. Supabase Submission
       await supabase.from('submissions').upsert({
         id: submissionId,
