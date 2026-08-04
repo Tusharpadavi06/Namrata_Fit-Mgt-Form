@@ -6,7 +6,7 @@
 import { toast } from 'sonner';
 
 export const DEFAULT_SHEET_ID = "1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4";
-export const DEFAULT_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbyFyxLdRLlpormotT-2zDdDN64Trlib5A7uNxsYbhhzWfvemL0KHfVNYcXJGVLPndkB/exec";
+export const DEFAULT_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxmEJxC1zcPMO6SUVQGWXf4n_xOl_ImJmGxl_K7WS1ZWe_u7YikZOo_pDz1Kd-i_4DG/exec";
 
 /**
  * Cleanly extracts a 44-character Google Sheet ID from any full URL or string.
