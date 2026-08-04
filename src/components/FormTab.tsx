@@ -595,20 +595,28 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
       // 0. Save assigned models to Supabase models table
       try {
-        const uniqueModelsMap = new Map<string, { name: string; email: string }>();
+        const uniqueModelsMap = new Map<string, { id: string; name: string; email: string }>();
         validAssignments.forEach(a => {
           const cleanEmail = a.modelEmail.trim().toLowerCase();
           if (cleanEmail && !uniqueModelsMap.has(cleanEmail)) {
-            uniqueModelsMap.set(cleanEmail, { name: a.modelName.trim(), email: cleanEmail });
+            const genId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+              ? crypto.randomUUID() 
+              : 'mod_' + Math.random().toString(36).substring(2, 11);
+            uniqueModelsMap.set(cleanEmail, { id: genId, name: a.modelName.trim(), email: cleanEmail });
           }
         });
         const uniqueModels = Array.from(uniqueModelsMap.values());
         if (uniqueModels.length > 0) {
+          // Attempt upsert with ID, name, email
           const { error: mErr } = await supabase.from('models').upsert(uniqueModels, { onConflict: 'email' });
           if (mErr) {
+            console.warn("Models upsert with ID failed:", mErr.message);
             for (const m of uniqueModels) {
               try {
-                await supabase.from('models').insert([{ name: m.name, email: m.email }]);
+                const res1 = await supabase.from('models').insert([{ id: m.id, name: m.name, email: m.email }]);
+                if (res1.error) {
+                  await supabase.from('models').insert([{ name: m.name, email: m.email }]);
+                }
               } catch (_) {}
             }
           }

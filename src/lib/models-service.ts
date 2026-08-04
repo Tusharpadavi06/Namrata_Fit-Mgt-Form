@@ -156,20 +156,46 @@ export async function addModelToPool(name: string, email: string): Promise<{ suc
 
   // Background DB sync
   try {
-    const { data, error } = await supabase
+    // Attempt 1: Insert with ID, name, email
+    let { data, error } = await supabase
       .from('models')
-      .insert([{ name: cleanName, email: cleanEmail }])
+      .insert([{ id: newId, name: cleanName, email: cleanEmail }])
       .select();
 
-    if (!error && data && data[0]) {
+    // Attempt 2: If insert with ID fails, try upserting with/without ID
+    if (error) {
+      console.warn("Supabase insert with ID failed, attempting fallback upsert/insert:", error.message);
+      const res2 = await supabase
+        .from('models')
+        .upsert([{ name: cleanName, email: cleanEmail }], { onConflict: 'email' })
+        .select();
+
+      if (!res2.error && res2.data) {
+        data = res2.data;
+        error = null;
+      } else {
+        const res3 = await supabase
+          .from('models')
+          .insert([{ name: cleanName, email: cleanEmail }])
+          .select();
+        if (!res3.error && res3.data) {
+          data = res3.data;
+          error = null;
+        }
+      }
+    }
+
+    if (error) {
+      console.error("Supabase models DB insert error:", error.message, error);
+    } else if (data && data[0]) {
       const dbModel = data[0];
       const latest = getLocalModels();
-      const mapped = latest.map(m => m.email.toLowerCase() === cleanEmail ? { ...m, id: String(dbModel.id) } : m);
+      const mapped = latest.map(m => m.email.toLowerCase() === cleanEmail ? { ...m, id: String(dbModel.id || newId) } : m);
       setLocalModels(mapped);
       return { success: true, models: mapped };
     }
-  } catch (err) {
-    console.warn("Background DB insert failed (saved locally):", err);
+  } catch (err: any) {
+    console.warn("Background DB insert exception (saved locally):", err?.message || err);
   }
 
   return { success: true, models: updated };
