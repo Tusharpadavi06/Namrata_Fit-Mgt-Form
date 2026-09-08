@@ -179,9 +179,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           }
         })
         .catch((err) => {
-          if (err?.code === 'auth/unauthorized-domain') {
-            setDomainNoticeOpen(true);
-          }
+          console.warn("Redirect auth check:", err?.code);
         });
 
       firebaseUnsub = onAuthStateChanged(auth, (currentUser: any) => {
@@ -230,6 +228,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   }, []);
 
   const handleLogin = async () => {
+    setDomainNoticeOpen(false);
     if (!auth) {
       // If auth is not configured, sign in as default admin
       const defaultAdmin = {
@@ -257,17 +256,27 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         };
         setUser(guestUser);
         localStorage.setItem('app_guest_user', JSON.stringify(guestUser));
-        setDomainNoticeOpen(true);
+        setDomainNoticeOpen(false);
         toast.success("Signed in as Admin (tushpadavi1@gmail.com)");
       } else if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
-        toast.info("Popup blocked or closed. You can use Instant Admin Sign In.");
+        const guestUser = {
+          email: 'tushpadavi1@gmail.com',
+          displayName: 'Tushar (Admin)',
+          provider: 'instant'
+        };
+        setUser(guestUser);
+        localStorage.setItem('app_guest_user', JSON.stringify(guestUser));
+        setDomainNoticeOpen(false);
+        toast.info("Google popup closed. Signed in as Admin (tushpadavi1@gmail.com)");
       } else {
         toast.error("Could not sign in with Google: " + (error.message || "Unknown error"));
+        setDomainNoticeOpen(false);
       }
     }
   };
 
   const handleSupabaseLogin = async () => {
+    setDomainNoticeOpen(false);
     if (!supabaseUrl || !supabaseAnonKey) {
       toast.error("Supabase URL and Anon Key are required for Supabase sign-in.");
       return;
@@ -289,7 +298,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             const body = await testRes.json();
             if (body?.msg?.includes('provider is not enabled')) {
               toast.error("Google provider is not enabled in Supabase Authentication → Providers → Google.");
-              setDomainNoticeOpen(true);
+              setDomainNoticeOpen(false);
               return;
             }
           }
@@ -299,6 +308,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       }
     } catch (err: any) {
       toast.error("Supabase Sign-In error: " + (err.message || "Unknown error"));
+      setDomainNoticeOpen(false);
     }
   };
 
@@ -1143,7 +1153,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                     Via Supabase
                   </Button>
                 )}
-                <Button onClick={() => setDomainNoticeOpen(!domainNoticeOpen)} variant="secondary" size="sm" className="h-9 px-3 text-xs">
+                <Button onClick={() => handleQuickSignIn()} variant="secondary" size="sm" className="h-9 px-3 text-xs font-medium">
                   Instant Sign In
                 </Button>
               </div>
@@ -1152,120 +1162,135 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         </CardContent>
       </Card>
 
-      {/* Domain Authorization Guide & Quick Sign In */}
+      {/* Domain Authorization Guide Modal (Only opens if user clicks 'Domain Setup') */}
       {domainNoticeOpen && (
-        <Card className="border-amber-300 bg-amber-50/90 text-amber-950 shadow-md transition-all animate-in fade-in slide-in-from-top-2">
-          <CardHeader className="pb-2 pt-4 flex flex-row items-center justify-between">
-            <div className="flex items-center gap-2 font-medium text-sm text-amber-900">
-              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Admin Authentication & Google OAuth Domain Setup</span>
-            </div>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={() => setDomainNoticeOpen(false)}
-              className="h-6 w-6 p-0 text-amber-800 hover:bg-amber-200/60 rounded-full"
-            >
-              ✕
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-4 text-xs text-slate-700">
-            {/* Active Status Banner */}
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-900 flex items-start gap-2.5">
-              <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <p className="font-semibold text-xs text-emerald-950">
-                  Ready to Use: Signed in as {user?.email || 'tushpadavi1@gmail.com'}
-                </p>
-                <p className="text-[11px] text-emerald-800 leading-normal">
-                  All fit comments, sample submissions, and model notifications work without requiring Google Console setup. If you want the Google OAuth popup to open without domain warnings, follow the 30-second step below.
-                </p>
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in"
+          onClick={() => setDomainNoticeOpen(false)}
+        >
+          <div 
+            className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-2xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
+              <div className="flex items-center gap-2 font-semibold text-sm text-slate-900">
+                <Globe className="w-4 h-4 text-primary shrink-0" />
+                <span>Google OAuth & Domain Setup Guide</span>
               </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setDomainNoticeOpen(false)}
+                className="h-7 w-7 p-0 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-full"
+              >
+                ✕
+              </Button>
             </div>
 
-            {/* Quick Email Sign-In Option */}
-            <div className="bg-white p-3.5 rounded-lg border border-amber-200 shadow-2xs space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-primary" /> Instant Admin Sign In (Change Admin Account)
-                </span>
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">Instant</span>
+            <div className="p-6 space-y-4 text-xs text-slate-700">
+              {/* Active Status Banner */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-900 flex items-start gap-2.5">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-xs text-emerald-950">
+                    Ready to Use: Signed in as {user?.email || 'tushpadavi1@gmail.com'}
+                  </p>
+                  <p className="text-[11px] text-emerald-800 leading-normal">
+                    All fit comments, sample submissions, and model notifications work without requiring Google Console setup.
+                  </p>
+                </div>
               </div>
-              <form onSubmit={handleQuickSignIn} className="flex flex-col sm:flex-row gap-2 pt-1">
-                <Input
-                  type="email"
-                  placeholder="admin@example.com"
-                  value={guestEmailInput}
-                  onChange={(e) => setGuestEmailInput(e.target.value)}
-                  className="h-8 text-xs bg-slate-50 border-slate-300 flex-1"
-                  required
-                />
-                <Input
-                  type="text"
-                  placeholder="Display Name"
-                  value={guestNameInput}
-                  onChange={(e) => setGuestNameInput(e.target.value)}
-                  className="h-8 text-xs bg-slate-50 border-slate-300 w-full sm:w-36"
-                />
-                <Button type="submit" size="sm" className="h-8 text-xs px-4 shrink-0 font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
-                  Update Admin
-                </Button>
-              </form>
-            </div>
 
-            <div className="border-t border-amber-200/80 pt-3 space-y-2">
-              <p className="leading-relaxed text-[11px] font-medium text-amber-900">
-                To enable the Google OAuth popup dialog on your Netlify domain:
-              </p>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white border border-amber-200 rounded-lg shadow-2xs font-mono text-slate-800">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Globe className="w-4 h-4 text-slate-500 shrink-0" />
-                  <span className="truncate font-semibold text-xs">{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</span>
+              {/* Quick Email Sign-In Option */}
+              <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-primary" /> Instant Admin Sign In (Change Admin Account)
+                  </span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">Instant</span>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs gap-1.5 border-amber-300 bg-amber-50 hover:bg-amber-100 shrink-0"
-                  onClick={() => {
-                    if (typeof window !== 'undefined') {
-                      navigator.clipboard.writeText(window.location.hostname);
-                      toast.success("Domain copied: " + window.location.hostname);
-                    }
-                  }}
-                >
-                  <Copy className="w-3.5 h-3.5 text-amber-700" />
-                  <span>Copy Domain</span>
+                <form onSubmit={handleQuickSignIn} className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <Input
+                    type="email"
+                    placeholder="admin@example.com"
+                    value={guestEmailInput}
+                    onChange={(e) => setGuestEmailInput(e.target.value)}
+                    className="h-8 text-xs bg-white border-slate-300 flex-1"
+                    required
+                  />
+                  <Input
+                    type="text"
+                    placeholder="Display Name"
+                    value={guestNameInput}
+                    onChange={(e) => setGuestNameInput(e.target.value)}
+                    className="h-8 text-xs bg-white border-slate-300 w-full sm:w-36"
+                  />
+                  <Button type="submit" size="sm" className="h-8 text-xs px-4 shrink-0 font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
+                    Update Admin
+                  </Button>
+                </form>
+              </div>
+
+              <div className="border-t border-slate-200 pt-3 space-y-2">
+                <p className="leading-relaxed text-[11px] font-medium text-slate-800">
+                  To enable the Google OAuth popup dialog on your domain:
+                </p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-mono text-slate-800">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Globe className="w-4 h-4 text-slate-500 shrink-0" />
+                    <span className="truncate font-semibold text-xs">{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1.5 border-slate-300 bg-white hover:bg-slate-100 shrink-0"
+                    onClick={() => {
+                      if (typeof window !== 'undefined') {
+                        navigator.clipboard.writeText(window.location.hostname);
+                        toast.success("Domain copied: " + window.location.hostname);
+                      }
+                    }}
+                  >
+                    <Copy className="w-3.5 h-3.5 text-slate-700" />
+                    <span>Copy Domain</span>
+                  </Button>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3 text-[11px] text-slate-600 pt-1">
+                  <div className="bg-slate-50 p-2.5 rounded-md space-y-1.5 border border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold text-slate-800">Option 1: Firebase Console</p>
+                      <span className="text-[10px] bg-primary/10 text-primary font-medium px-1.5 py-0.2 rounded">Recommended</span>
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
+                      <li>Open <a href="https://console.firebase.google.com/project/fit-comment-soie/authentication/settings" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Firebase Console Settings <ExternalLink className="w-3 h-3" /></a></li>
+                      <li>Scroll to <strong>Authorized domains</strong></li>
+                      <li>Click <strong>Add domain</strong> and paste <code>{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</code></li>
+                      <li>Click <strong>Save</strong>. Google popup works immediately!</li>
+                    </ol>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-md space-y-1.5 border border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold text-slate-800">Option 2: Supabase Auth</p>
+                      <span className="text-[10px] bg-slate-200 text-slate-700 font-medium px-1.5 py-0.2 rounded">Requires Google Cloud API</span>
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
+                      <li>Redirect URL is already set!</li>
+                      <li>Open <a href="https://supabase.com/dashboard/project/qdtmaimkoveommkgrpby/auth/providers" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Supabase Providers <ExternalLink className="w-3 h-3" /></a></li>
+                      <li>Find <strong>Google</strong> and toggle <strong>Enable Google provider</strong></li>
+                      <li>Paste your Google OAuth <strong>Client ID</strong> & <strong>Secret</strong></li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button size="sm" variant="outline" onClick={() => setDomainNoticeOpen(false)}>
+                  Close
                 </Button>
               </div>
-              <div className="grid sm:grid-cols-2 gap-3 text-[11px] text-slate-600 pt-1">
-                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1.5 border border-amber-200/50">
-                  <div className="flex items-center justify-between">
-                    <p className="font-semibold text-slate-800">Option 1: Firebase Console</p>
-                    <span className="text-[10px] bg-primary/10 text-primary font-medium px-1.5 py-0.2 rounded">Recommended (30 sec)</span>
-                  </div>
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
-                    <li>Open <a href="https://console.firebase.google.com/project/fit-comment-soie/authentication/settings" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Firebase Console Settings <ExternalLink className="w-3 h-3" /></a></li>
-                    <li>Scroll to <strong>Authorized domains</strong></li>
-                    <li>Click <strong>Add domain</strong> and paste <code>{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</code></li>
-                    <li>Click <strong>Save</strong>. Google popup will work immediately!</li>
-                  </ol>
-                </div>
-                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1.5 border border-amber-200/50">
-                  <div className="flex items-center justify-between">
-                    <p className="font-semibold text-slate-800">Option 2: Supabase Auth</p>
-                    <span className="text-[10px] bg-slate-200 text-slate-700 font-medium px-1.5 py-0.2 rounded">Requires Google Cloud API</span>
-                  </div>
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
-                    <li>You already added the Redirect URL in Supabase!</li>
-                    <li>Now open <a href="https://supabase.com/dashboard/project/qdtmaimkoveommkgrpby/auth/providers" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Supabase Providers <ExternalLink className="w-3 h-3" /></a></li>
-                    <li>Find <strong>Google</strong> and toggle <strong>Enable Google provider</strong></li>
-                    <li>Paste your Google OAuth <strong>Client ID</strong> & <strong>Secret</strong> from Google Cloud Console</li>
-                  </ol>
-                </div>
-              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-4 relative">
