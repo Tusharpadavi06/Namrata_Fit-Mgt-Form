@@ -213,6 +213,23 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                  }
               }
             }
+
+            // If we found assignment but not submission, cross-fetch submission via assignment.submission_id
+            if (!subData && assData && assData.submission_id) {
+              try {
+                const { data: sFromAss } = await supabase
+                  .from('submissions')
+                  .select('*')
+                  .eq('id', assData.submission_id)
+                  .maybeSingle();
+                if (sFromAss) {
+                  subData = sFromAss;
+                  console.log("Supabase submission found via assData.submission_id:", sFromAss.style_number);
+                }
+              } catch (crossErr: any) {
+                console.warn("Error cross-fetching submission from assignment:", crossErr.message);
+              }
+            }
           } catch (se: any) {
             console.warn("Supabase fetch exception (handled):", se.message);
           }
@@ -232,7 +249,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                         id: item.id || sId,
                         style_number: item.style_number || item.styleNo || 'Style Sample',
                         type_of_sample: item.type_of_sample || item.sampleType || 'Fit Comment',
-                        description: item.description || ''
+                        description: item.description || '',
+                        series: item.series || ''
                       };
                     }
                     if (!assData && item.assignments) {
@@ -250,14 +268,87 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           }
         }
 
-        // 4. Guaranteed Resilient Fallback - Construct valid objects from parameters so the link ALWAYS opens!
+        // 3.5 Fallback: Query Google Sheets with &headers=1 across all series tabs
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlStyleNo = urlParams.get('styleNo') || urlParams.get('style_number') || urlParams.get('style');
+
+        if (!subData || !assData) {
+          try {
+            console.log("Checking Google Sheets as resilient fallback for assignment ID:", aId);
+            const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
+            const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
+            for (const tab of tabs) {
+              if (subData && assData) break;
+              try {
+                const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&headers=1&sheet=${encodeURIComponent(tab)}`);
+                const text = await res.text();
+                const json = JSON.parse(text.substring(47).slice(0, -2));
+                const rows = json.table?.rows || [];
+                for (const r of rows) {
+                  const cells = (r.c || []).map((cell: any) => cell ? String(cell.f || cell.v || '') : '');
+                  const hasAId = cells.some((c: string) => aId && c.trim() === aId.trim());
+                  const hasSId = cells.some((c: string) => sId && c.trim() === sId.trim());
+                  const cellStyle = cells[3] || '';
+                  
+                  if (hasAId || (sId && hasSId) || (urlStyleNo && cellStyle.toUpperCase() === urlStyleNo.toUpperCase())) {
+                    console.log("Found matching assignment in Google Sheet tab:", tab);
+                    let parsedDate = '';
+                    if (cells[7]) {
+                      if (cells[7].startsWith('Date(')) {
+                        const parts = cells[7].replace(/Date\(|\)/g, '').split(',');
+                        if (parts.length >= 3) {
+                          const y = parts[0].trim();
+                          const m = String(parseInt(parts[1].trim()) + 1).padStart(2, '0');
+                          const d = parts[2].trim().padStart(2, '0');
+                          parsedDate = `${d}/${m}/${y}`;
+                        }
+                      } else {
+                        parsedDate = cells[7];
+                      }
+                    }
+                    if (!assData) {
+                      assData = {
+                        id: aId,
+                        submission_id: sId,
+                        model_name: cells[1] || 'Model',
+                        model_email: '',
+                        color: cells[6] || '',
+                        size: cells[5] || '',
+                        given_for_fit_date: parsedDate,
+                        style_number: cells[3] || urlStyleNo || '',
+                        series: tab
+                      };
+                    }
+                    if (!subData) {
+                      subData = {
+                        id: sId,
+                        style_number: cells[3] || urlStyleNo || 'Style Sample',
+                        type_of_sample: cells[2] || 'Fit Comment',
+                        description: cells[4] || '',
+                        series: tab
+                      };
+                    }
+                    break;
+                  }
+                }
+              } catch (_) {}
+            }
+          } catch (sheetErr) {
+            console.warn("Google Sheets fallback search failed:", sheetErr);
+          }
+        }
+
+        // 4. Guaranteed Resilient Fallback - Construct valid objects from parameters without dummy names
         if (!subData && sId) {
-          console.log("Synthesizing resilient submission fallback for sId:", sId);
+          const resolvedStyle = urlStyleNo || (assData?.style_number && assData.style_number !== 'Style Sample' ? assData.style_number : '') || 'Fit Sample';
+          const resolvedSeries = getSeriesFromStyleNumber(resolvedStyle);
+          console.log("Synthesizing resilient submission fallback for sId:", sId, "style:", resolvedStyle);
           subData = {
             id: sId,
-            style_number: 'Style ' + (sId.length > 8 ? sId.slice(0, 8) : sId),
-            type_of_sample: 'Fit Comment',
-            description: 'Model Fit Review'
+            style_number: resolvedStyle,
+            type_of_sample: assData?.type_of_sample || 'Fit Comment',
+            description: 'Model Fit Review',
+            series: resolvedSeries
           };
         }
 
@@ -266,7 +357,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData = {
             id: aId,
             submission_id: sId,
-            model_name: 'Model Feedback',
+            model_name: 'Model',
             model_email: '',
             color: '',
             size: '',
@@ -276,8 +367,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         
         // Ensure keys are accessible via both snake_case and camelCase
         if (subData) {
-          subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber || 'Style Sample';
+          subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber || urlStyleNo || 'Style Sample';
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample || 'Fit Comment';
+          subData.series = subData.series || getSeriesFromStyleNumber(subData.style_number);
           setSubmissionData(subData);
         }
         
@@ -287,6 +379,23 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
           setAssignmentData(assData);
         }
+
+        // Auto-heal into Supabase in the background if we have valid record data
+        try {
+          if (subData && subData.id && subData.style_number && subData.style_number !== 'Style Sample' && subData.style_number !== 'Fit Sample') {
+            supabase.from('submissions').upsert({
+              id: subData.id,
+              style_number: subData.style_number,
+              type_of_sample: subData.type_of_sample || 'Sample',
+              description: subData.description || '',
+              series: subData.series || getSeriesFromStyleNumber(subData.style_number),
+              submitted_by: 'admin@fitcomment.com'
+            }).then(({ error }: any) => {
+              if (error) console.warn("Background auto-heal sub:", error.message);
+              else console.log("Background auto-heal sub OK:", subData.style_number);
+            });
+          }
+        } catch (_) {}
 
       } catch (error) {
         console.error("Critical fetch error:", error);
@@ -493,7 +602,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       const adminEditR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=4`;
       const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5`;
 
-      const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
+      const series = submissionData.series || getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
 
       const sheetPayload = {
         assignmentId: assignmentId,
@@ -522,8 +631,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 1 (G-M)
         "G": round === "1" ? (color || assignmentData.color || "") : (assignmentData.round1?.color || assignmentData.round_1?.color || ""),
         "H": round === "1" ? (givenForFitDate || "") : (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || ""),
-        "I": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
-        "J": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "I": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "J": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
         "K": round === "1" ? (beforeWash || "") : (assignmentData.round1?.before_wash || assignmentData.round_1?.before_wash || ""),
         "L": round === "1" ? (afterWash || "") : (assignmentData.round1?.after_wash || assignmentData.round_1?.after_wash || ""),
         "M": round === "1" ? (fabricTrims || "") : (assignmentData.round1?.fabric_trims || assignmentData.round_1?.fabric_trims || ""),
@@ -531,8 +640,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 2 (O-U)
         "O": round === "2" ? (color || assignmentData.color || "") : (assignmentData.round2?.color || assignmentData.round_2?.color || ""),
         "P": round === "2" ? (givenForFitDate || "") : (assignmentData.round2?.given_for_fit_date || assignmentData.round_2?.given_for_fit_date || ""),
-        "Q": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
-        "R": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "Q": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "R": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
         "S": round === "2" ? (beforeWash || "") : (assignmentData.round2?.before_wash || assignmentData.round_2?.before_wash || ""),
         "T": round === "2" ? (afterWash || "") : (assignmentData.round2?.after_wash || assignmentData.round_2?.after_wash || ""),
         "U": round === "2" ? (fabricTrims || "") : (assignmentData.round2?.fabric_trims || assignmentData.round_2?.fabric_trims || ""),
@@ -540,8 +649,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 3 (W-AC)
         "W": round === "3" ? (color || assignmentData.color || "") : (assignmentData.round3?.color || assignmentData.round_3?.color || ""),
         "X": round === "3" ? (givenForFitDate || "") : (assignmentData.round3?.given_for_fit_date || assignmentData.round_3?.given_for_fit_date || ""),
-        "Y": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
-        "Z": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Y": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Z": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
         "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
         "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
         "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
@@ -549,8 +658,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 4 (AE-AK)
         "AE": round === "4" ? (color || assignmentData.color || "") : (assignmentData.round4?.color || (assignmentData.round_4?.color || "")),
         "AF": round === "4" ? (givenForFitDate || "") : (assignmentData.round4?.given_for_fit_date || (assignmentData.round_4?.given_for_fit_date || "")),
-        "AG": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
-        "AH": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AG": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AH": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
         "AI": round === "4" ? (beforeWash || "") : (assignmentData.round4?.before_wash || (assignmentData.round_4?.before_wash || "")),
         "AJ": round === "4" ? (afterWash || "") : (assignmentData.round4?.after_wash || (assignmentData.round_4?.after_wash || "")),
         "AK": round === "4" ? (fabricTrims || "") : (assignmentData.round4?.fabric_trims || (assignmentData.round_4?.fabric_trims || "")),
@@ -558,8 +667,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 5 (AM-AS)
         "AM": round === "5" ? (color || assignmentData.color || "") : (assignmentData.round5?.color || (assignmentData.round_5?.color || "")),
         "AN": round === "5" ? (givenForFitDate || "") : (assignmentData.round5?.given_for_fit_date || (assignmentData.round_5?.given_for_fit_date || "")),
-        "AO": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
-        "AP": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AO": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AP": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
         "AQ": round === "5" ? (beforeWash || "") : (assignmentData.round5?.before_wash || (assignmentData.round_5?.before_wash || "")),
         "AR": round === "5" ? (afterWash || "") : (assignmentData.round5?.after_wash || (assignmentData.round_5?.after_wash || "")),
         "AS": round === "5" ? (fabricTrims || "") : (assignmentData.round5?.fabric_trims || (assignmentData.round_5?.fabric_trims || "")),

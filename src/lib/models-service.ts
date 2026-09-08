@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { v4 as uuidv4 } from 'uuid';
 
 export interface Model {
   id: string;
@@ -6,10 +7,17 @@ export interface Model {
   email: string;
 }
 
+export function isValidUuid(str?: string): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str.trim());
+}
+
 export const DEFAULT_MODELS: Model[] = [
-  { id: 'def-1', name: 'Pooja', email: 'pooja@example.com' },
-  { id: 'def-2', name: 'Ananya', email: 'ananya@example.com' },
-  { id: 'def-3', name: 'Riya', email: 'riya@example.com' }
+  { id: '3df773b5-1324-49d5-8d44-d307e7340816', name: 'Pooja', email: 'pooja@example.com' },
+  { id: '63f9c222-9f98-4d91-a508-4be57c2ee231', name: 'Sakshi', email: 'crm.mumbai@ginzalimited.com' },
+  { id: '24d92afd-853b-47c7-8cbb-ff347d7f37c2', name: 'Lalna', email: 'lalna@example.com' },
+  { id: '5752e23b-1883-4693-9157-46dc167c80f4', name: 'Sheetal', email: 'sheetal@example.com' },
+  { id: 'af6caad2-624f-4f1d-b4bb-0b2bb8983582', name: 'Tushar', email: 'tushar@example.com' }
 ];
 
 const CACHE_KEY = 'model_pool_cache';
@@ -55,7 +63,14 @@ export function getLocalModels(): Model[] {
       const parsed: Model[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
         const deleted = getDeletedEmails();
-        return parsed.filter(m => !deleted.includes(m.email.toLowerCase()));
+        // Sanitize any legacy non-UUID IDs
+        const sanitized = parsed
+          .filter(m => !deleted.includes((m.email || '').toLowerCase()))
+          .map(m => ({
+            ...m,
+            id: isValidUuid(m.id) ? m.id : uuidv4()
+          }));
+        return sanitized;
       }
     }
   } catch (e) {
@@ -75,7 +90,11 @@ export function getLocalModels(): Model[] {
 
 export function setLocalModels(models: Model[]) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(models));
+    const sanitized = models.map(m => ({
+      ...m,
+      id: isValidUuid(m.id) ? m.id : uuidv4()
+    }));
+    localStorage.setItem(CACHE_KEY, JSON.stringify(sanitized));
   } catch (e) {
     console.warn("Error saving local models:", e);
   }
@@ -91,13 +110,13 @@ export async function fetchAllModels(): Promise<Model[]> {
       .select('id, name, email')
       .order('name');
 
-    if (!error && data && Array.isArray(data) && data.length > 0) {
+    if (!error && data && Array.isArray(data)) {
       const map = new Map<string, Model>();
 
       // Put local models in map first
       local.forEach(m => {
-        if (!deleted.includes(m.email.toLowerCase())) {
-          map.set(m.email.toLowerCase(), m);
+        if (!deleted.includes((m.email || '').toLowerCase())) {
+          map.set((m.email || '').toLowerCase(), m);
         }
       });
 
@@ -106,7 +125,7 @@ export async function fetchAllModels(): Promise<Model[]> {
         const cleanEmail = (dbm.email || '').toLowerCase();
         if (cleanEmail && !deleted.includes(cleanEmail)) {
           map.set(cleanEmail, {
-            id: String(dbm.id),
+            id: isValidUuid(dbm.id) ? dbm.id : uuidv4(),
             name: dbm.name,
             email: dbm.email
           });
@@ -140,10 +159,8 @@ export async function addModelToPool(name: string, email: string): Promise<{ suc
   // Remove from deleted list if re-added
   unmarkDeletedEmail(cleanEmail);
 
-  const isCryptoAvailable = typeof crypto !== 'undefined';
-  const newId = (isCryptoAvailable && crypto.randomUUID) 
-    ? crypto.randomUUID() 
-    : 'model_' + Math.random().toString(36).substring(2, 11);
+  // Always generate a valid UUID
+  const newId = uuidv4();
 
   const newModel: Model = {
     id: newId,
@@ -154,48 +171,36 @@ export async function addModelToPool(name: string, email: string): Promise<{ suc
   const updated = [...currentModels, newModel].sort((a, b) => a.name.localeCompare(b.name));
   setLocalModels(updated);
 
-  // Background DB sync
+  // Supabase DB Sync
   try {
-    // Attempt 1: Insert with ID, name, email
-    let { data, error } = await supabase
+    // Check if model already exists in Supabase
+    const { data: existing } = await supabase
+      .from('models')
+      .select('id')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (existing && existing.id) {
+      // Model exists in DB, update local model with DB's UUID
+      const latest = getLocalModels().map(m => m.email.toLowerCase() === cleanEmail ? { ...m, id: existing.id } : m);
+      setLocalModels(latest);
+      return { success: true, models: latest };
+    }
+
+    // Insert new model with valid UUID
+    const { data, error } = await supabase
       .from('models')
       .insert([{ id: newId, name: cleanName, email: cleanEmail }])
       .select();
 
-    // Attempt 2: If insert with ID fails, try upserting with/without ID
-    if (error) {
-      console.warn("Supabase insert with ID failed, attempting fallback upsert/insert:", error.message);
-      const res2 = await supabase
-        .from('models')
-        .upsert([{ name: cleanName, email: cleanEmail }], { onConflict: 'email' })
-        .select();
-
-      if (!res2.error && res2.data) {
-        data = res2.data;
-        error = null;
-      } else {
-        const res3 = await supabase
-          .from('models')
-          .insert([{ name: cleanName, email: cleanEmail }])
-          .select();
-        if (!res3.error && res3.data) {
-          data = res3.data;
-          error = null;
-        }
-      }
-    }
-
-    if (error) {
-      console.error("Supabase models DB insert error:", error.message, error);
-    } else if (data && data[0]) {
-      const dbModel = data[0];
-      const latest = getLocalModels();
-      const mapped = latest.map(m => m.email.toLowerCase() === cleanEmail ? { ...m, id: String(dbModel.id || newId) } : m);
-      setLocalModels(mapped);
-      return { success: true, models: mapped };
+    if (!error && data && data[0]) {
+      const dbId = data[0].id;
+      const latest = getLocalModels().map(m => m.email.toLowerCase() === cleanEmail ? { ...m, id: dbId } : m);
+      setLocalModels(latest);
+      return { success: true, models: latest };
     }
   } catch (err: any) {
-    console.warn("Background DB insert exception (saved locally):", err?.message || err);
+    console.warn("Supabase model insert error (saved locally):", err?.message || err);
   }
 
   return { success: true, models: updated };
@@ -215,14 +220,17 @@ export async function deleteModelFromPool(id: string, email?: string): Promise<{
 
   // Background DB delete
   try {
-    if (id) {
+    if (id && isValidUuid(id)) {
+      try {
+        await supabase.from('assignments').update({ model_id: null }).eq('model_id', id);
+      } catch (_) {}
       await supabase.from('models').delete().eq('id', id);
     }
     if (targetEmail) {
       await supabase.from('models').delete().eq('email', targetEmail);
     }
   } catch (err) {
-    console.warn("Background DB delete failed (deleted locally):", err);
+    console.warn("Supabase model delete failed (deleted locally):", err);
   }
 
   return { success: true, models: updated };

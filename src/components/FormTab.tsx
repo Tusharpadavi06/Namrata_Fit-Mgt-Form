@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { Badge } from './ui/badge';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
 import { v4 as uuidv4 } from 'uuid';
+import { isValidUuid } from '../lib/models-service';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { db, auth, safeFirestoreWrite, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from '../lib/firebase';
 import { doc, setDoc, getDoc, getDocs, collection, query, where, serverTimestamp } from 'firebase/firestore';
@@ -580,44 +581,49 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const userEmail = currentUser?.email || 'admin@fitcomment.com'; 
       const userName = currentUser?.displayName || userEmail;
 
+      const encodedStyleParam = encodeURIComponent(styleNo.trim());
       const assignmentsWithLinks = validAssignments.map(a => {
         // Ensure the ID is deterministic based on current submission and model email
         // This forces merging in the database and Google Sheets
         const finalAId = getDeterministicId(submissionId!, a.modelEmail);
         
-        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1`;
-        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2`;
-        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3`;
-        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4`;
-        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5`;
+        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1&styleNo=${encodedStyleParam}`;
+        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2&styleNo=${encodedStyleParam}`;
+        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3&styleNo=${encodedStyleParam}`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4&styleNo=${encodedStyleParam}`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5&styleNo=${encodedStyleParam}`;
         return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
-      // 0. Save assigned models to Supabase models table
+      // 0. Ensure models in uniqueModels are in Supabase models table with valid UUIDs
+      const modelIdMap = new Map<string, string>(); // email -> real valid UUID
       try {
-        const uniqueModelsMap = new Map<string, { id: string; name: string; email: string }>();
-        validAssignments.forEach(a => {
+        for (const a of validAssignments) {
           const cleanEmail = a.modelEmail.trim().toLowerCase();
-          if (cleanEmail && !uniqueModelsMap.has(cleanEmail)) {
-            const genId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
-              ? crypto.randomUUID() 
-              : 'mod_' + Math.random().toString(36).substring(2, 11);
-            uniqueModelsMap.set(cleanEmail, { id: genId, name: a.modelName.trim(), email: cleanEmail });
-          }
-        });
-        const uniqueModels = Array.from(uniqueModelsMap.values());
-        if (uniqueModels.length > 0) {
-          // Attempt upsert with ID, name, email
-          const { error: mErr } = await supabase.from('models').upsert(uniqueModels, { onConflict: 'email' });
-          if (mErr) {
-            console.warn("Models upsert with ID failed:", mErr.message);
-            for (const m of uniqueModels) {
-              try {
-                const res1 = await supabase.from('models').insert([{ id: m.id, name: m.name, email: m.email }]);
-                if (res1.error) {
-                  await supabase.from('models').insert([{ name: m.name, email: m.email }]);
-                }
-              } catch (_) {}
+          if (!cleanEmail || modelIdMap.has(cleanEmail)) continue;
+
+          // Check if already in models table
+          const { data: existing } = await supabase
+            .from('models')
+            .select('id')
+            .eq('email', cleanEmail)
+            .maybeSingle();
+
+          if (existing && existing.id && isValidUuid(existing.id)) {
+            modelIdMap.set(cleanEmail, existing.id);
+          } else {
+            // Generate a valid UUID and insert
+            const generatedId = (a.modelId && isValidUuid(a.modelId)) ? a.modelId : uuidv4();
+            const { data: insData } = await supabase
+              .from('models')
+              .insert([{ id: generatedId, name: a.modelName.trim(), email: cleanEmail }])
+              .select('id')
+              .maybeSingle();
+
+            if (insData?.id) {
+              modelIdMap.set(cleanEmail, insData.id);
+            } else {
+              modelIdMap.set(cleanEmail, generatedId);
             }
           }
         }
@@ -626,7 +632,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       }
 
       // 1. Supabase Submission
-      await supabase.from('submissions').upsert({
+      const { error: subErr } = await supabase.from('submissions').upsert({
         id: submissionId,
         style_number: styleNo.trim(),
         type_of_sample: typeOfSample,
@@ -634,6 +640,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         series: series || 'General',
         submitted_by: userEmail
       });
+      if (subErr) {
+        console.error("Supabase submission error:", subErr);
+      }
 
       // 1b. Firestore Submission (Backup for ModelResponseView)
       safeFirestoreWrite(async () => {
@@ -650,6 +659,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
       // 2. Supabase Assignments
       const assPayload = assignmentsWithLinks.map(a => {
+        const cleanEmail = a.modelEmail.trim().toLowerCase();
+        const resolvedModelId = modelIdMap.get(cleanEmail) || (a.modelId && isValidUuid(a.modelId) ? a.modelId : null);
+
         // Dynamic assignment round specific updates during admin submission
         const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
         const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
@@ -660,7 +672,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         return {
           id: a.id,
           submission_id: submissionId,
-          model_id: a.modelId,
+          model_id: resolvedModelId,
           model_name: a.modelName,
           model_email: a.modelEmail,
           color: a.color,
@@ -683,18 +695,51 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const { error: assError } = await supabase.from('assignments').upsert(assPayload);
       
       if (assError) {
-        console.warn("Supabase Assignments batch failed, trying absolute minimal fallback:", assError);
-        // Absolute minimal fallback - only core columns that likely exist
-        const minimalAss = assignmentsWithLinks.map(a => ({
+        console.warn("Supabase Assignments batch with model_id failed, trying safe fallback without model_id:", assError);
+        // Safe fallback - keep ALL data intact, only set model_id to null so FK constraint is bypassed
+        const safeAssPayload = assPayload.map(a => ({ ...a, model_id: null }));
+        const { error: safeErr } = await supabase.from('assignments').upsert(safeAssPayload);
+        if (safeErr) {
+          console.error("Critical: Safe Supabase fallback also failed:", safeErr);
+        }
+      }
+
+      // Update local history cache immediately so data is visible instantly in History and ModelResponseView
+      try {
+        const existingCache = localStorage.getItem('history_cache');
+        let cacheList: any[] = existingCache ? JSON.parse(existingCache) : [];
+        const newHistItem = {
+          id: submissionId,
+          style_number: styleNo.trim(),
+          type_of_sample: typeOfSample,
+          description: description,
+          series: series || 'General',
+          submitted_by: userEmail,
+          created_at: new Date().toISOString(),
+          assignments: assignmentsWithLinks.map(a => ({
             id: a.id,
             submission_id: submissionId,
             model_name: a.modelName,
             model_email: a.modelEmail,
             color: a.color,
-            size: a.size
-        }));
-        const { error: minErr } = await supabase.from('assignments').upsert(minimalAss);
-        if (minErr) console.error("Critical: Minimal Supabase fallback also failed:", minErr);
+            size: a.size,
+            given_for_fit_date: a.givenForFitDate,
+            r1_link: a.r1Link,
+            r2_link: a.r2Link,
+            r3_link: a.r3Link,
+            r4_link: a.r4Link,
+            r5_link: a.r5Link,
+            round1: a.round1Data || (currentRound === '1' ? { color: a.color, given_for_fit_date: a.givenForFitDate } : null),
+            round2: a.round2Data || (currentRound === '2' ? { color: a.color, given_for_fit_date: a.givenForFitDate } : null),
+            round3: a.round3Data || (currentRound === '3' ? { color: a.color, given_for_fit_date: a.givenForFitDate } : null),
+            round4: a.round4Data || (currentRound === '4' ? { color: a.color, given_for_fit_date: a.givenForFitDate } : null),
+            round5: a.round5Data || (currentRound === '5' ? { color: a.color, given_for_fit_date: a.givenForFitDate } : null)
+          }))
+        };
+        cacheList = [newHistItem, ...cacheList.filter(c => c.id !== submissionId)];
+        localStorage.setItem('history_cache', JSON.stringify(cacheList));
+      } catch (cErr) {
+        console.warn("Local history cache update failed:", cErr);
       }
 
       // 2b. Firestore Assignments (Critical for ModelResponseView)

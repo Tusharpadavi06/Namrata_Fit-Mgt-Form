@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid';
+import { isValidUuid } from '../lib/models-service';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
@@ -58,6 +60,124 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
     return '-';
   };
 
+  const fetchGoogleSheetsSubmissions = async (): Promise<Submission[]> => {
+    const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
+    const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
+    const submissionsMap = new Map<string, Submission>();
+
+    for (const tab of tabs) {
+      try {
+        const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&headers=1&sheet=${encodeURIComponent(tab)}`);
+        const text = await res.text();
+        const json = JSON.parse(text.substring(47).slice(0, -2));
+        const rows = json.table?.rows || [];
+
+        rows.forEach((r: any) => {
+          const cells = (r.c || []).map((cell: any) => cell ? String(cell.f || cell.v || '') : '');
+          const timestamp = cells[0] || '';
+          const modelName = cells[1] || '';
+          const sampleType = cells[2] || '';
+          const styleNo = cells[3] || '';
+          const description = cells[4] || '';
+          const size = cells[5] || '';
+          const color = cells[6] || '';
+          let fitDate = cells[7] || '';
+          if (fitDate.startsWith('Date(')) {
+            const parts = fitDate.replace(/Date\(|\)/g, '').split(',');
+            if (parts.length >= 3) {
+              const y = parts[0].trim();
+              const m = String(parseInt(parts[1].trim()) + 1).padStart(2, '0');
+              const d = parts[2].trim().padStart(2, '0');
+              fitDate = `${d}/${m}/${y}`;
+            }
+          }
+          const aId = cells[49] || '';
+
+          if (!styleNo || styleNo.toLowerCase().includes('style no') || !modelName) return;
+
+          const subKey = styleNo.trim().toUpperCase();
+          if (!submissionsMap.has(subKey)) {
+            submissionsMap.set(subKey, {
+              id: aId ? `sheet-${styleNo.trim()}` : uuidv4(),
+              style_number: styleNo.trim(),
+              type_of_sample: sampleType || 'Sample',
+              description: description || '',
+              series: tab,
+              created_at: timestamp ? new Date().toISOString() : new Date().toISOString(),
+              submitted_by: 'Google Sheets',
+              assignments: []
+            });
+          }
+
+          const sub = submissionsMap.get(subKey)!;
+          const alreadyAssigned = sub.assignments?.some(
+            (a: any) => (aId && a.id === aId) || (a.model_name === modelName && a.size === size)
+          );
+
+          if (!alreadyAssigned) {
+            sub.assignments = sub.assignments || [];
+            sub.assignments.push({
+              id: aId || uuidv4(),
+              model_name: modelName,
+              model_email: '',
+              color: color,
+              size: size,
+              round1: {
+                color,
+                given_for_fit_date: fitDate,
+                received_date: cells[8] || '',
+                comments_received_date: cells[9] || '',
+                before_wash: cells[10] || '',
+                after_wash: cells[11] || '',
+                fabric_trims: cells[12] || ''
+              },
+              round2: {
+                color: cells[14] || '',
+                given_for_fit_date: cells[15] || '',
+                received_date: cells[16] || '',
+                comments_received_date: cells[17] || '',
+                before_wash: cells[18] || '',
+                after_wash: cells[19] || '',
+                fabric_trims: cells[20] || ''
+              },
+              round3: {
+                color: cells[22] || '',
+                given_for_fit_date: cells[23] || '',
+                received_date: cells[24] || '',
+                comments_received_date: cells[25] || '',
+                before_wash: cells[26] || '',
+                after_wash: cells[27] || '',
+                fabric_trims: cells[28] || ''
+              },
+              round4: {
+                color: cells[30] || '',
+                given_for_fit_date: cells[31] || '',
+                received_date: cells[32] || '',
+                comments_received_date: cells[33] || '',
+                before_wash: cells[34] || '',
+                after_wash: cells[35] || '',
+                fabric_trims: cells[36] || ''
+              },
+              round5: {
+                color: cells[38] || '',
+                given_for_fit_date: cells[39] || '',
+                received_date: cells[40] || '',
+                comments_received_date: cells[41] || '',
+                before_wash: cells[42] || '',
+                after_wash: cells[43] || '',
+                fabric_trims: cells[44] || ''
+              }
+            });
+          }
+        });
+      } catch (err) {
+        console.warn(`Error reading sheet tab ${tab}:`, err);
+      }
+    }
+
+    return Array.from(submissionsMap.values());
+  };
+
   const fetchSubmissions = async () => {
     setLoading(true);
     setSupabaseFailed(false);
@@ -77,10 +197,71 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         throw error;
       }
 
-      if (data) {
-        setSubmissions(data as any);
-        setSupabaseFailed(false);
+      let currentList: Submission[] = [];
+      if (data && data.length > 0) {
+        currentList = (data as any) as Submission[];
       }
+
+      // Merge Google Sheets data to guarantee full parity with Google Sheets
+      try {
+        const sheetSubs = await fetchGoogleSheetsSubmissions();
+        for (const sSub of sheetSubs) {
+          const matchIdx = currentList.findIndex(
+            item => item.style_number?.trim().toUpperCase() === sSub.style_number?.trim().toUpperCase()
+          );
+          if (matchIdx === -1) {
+            // Missing in Supabase! Add to display
+            currentList.push(sSub);
+            // Self-heal into Supabase in background
+            const newSubId = uuidv4();
+            supabase.from('submissions').upsert({
+              id: newSubId,
+              style_number: sSub.style_number,
+              type_of_sample: sSub.type_of_sample,
+              description: sSub.description,
+              series: sSub.series,
+              submitted_by: 'admin@fitcomment.com'
+            }).then(() => {
+              if (sSub.assignments && sSub.assignments.length > 0) {
+                const assInserts = sSub.assignments.map(a => ({
+                  id: a.id && isValidUuid(a.id) ? a.id : uuidv4(),
+                  submission_id: newSubId,
+                  model_name: a.model_name,
+                  model_email: a.model_email || '',
+                  color: a.color || '',
+                  size: a.size || '',
+                  round1: a.round1 || {},
+                  round2: a.round2 || {},
+                  round3: a.round3 || {}
+                }));
+                supabase.from('assignments').upsert(assInserts).then(() => {});
+              }
+            });
+          } else {
+            // Merge assignments & rounds
+            const existing = currentList[matchIdx];
+            const existingAssIds = new Set((existing.assignments || []).map((a: any) => a.id));
+            const existingAssNames = new Set((existing.assignments || []).map((a: any) => `${a.model_name}_${a.size}`));
+            for (const a of sSub.assignments || []) {
+              if (!existingAssIds.has(a.id) && !existingAssNames.has(`${a.model_name}_${a.size}`)) {
+                existing.assignments = existing.assignments || [];
+                existing.assignments.push(a);
+              }
+            }
+          }
+        }
+      } catch (sheetMergeErr) {
+        console.warn("Failed to merge from Google Sheets:", sheetMergeErr);
+      }
+
+      // Sort chronologically descending
+      currentList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      setSubmissions(currentList);
+      setSupabaseFailed(false);
+      try {
+        localStorage.setItem('history_cache', JSON.stringify(currentList));
+      } catch (_) {}
     } catch (err) {
       setSupabaseFailed(true);
       // Defer-loaded, resilient chunked Firestore fallback
@@ -189,9 +370,32 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         // Sort in-memory to preserve chrono order if ordered query fell back
         docs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-        setSubmissions(docs);
+        if (docs.length > 0) {
+          setSubmissions(docs);
+        } else {
+          // Check local cache if Firestore returned 0 docs
+          const rawHist = localStorage.getItem('history_cache');
+          if (rawHist) {
+            try {
+              const cached = JSON.parse(rawHist);
+              if (Array.isArray(cached) && cached.length > 0) {
+                setSubmissions(cached);
+              }
+            } catch (_) {}
+          }
+        }
       } catch (fErr) {
         console.error("Firestore history fallback also failed:", fErr);
+        const rawHist = localStorage.getItem('history_cache');
+        if (rawHist) {
+          try {
+            const cached = JSON.parse(rawHist);
+            if (Array.isArray(cached) && cached.length > 0) {
+              setSubmissions(cached);
+              return;
+            }
+          } catch (_) {}
+        }
         toast.error("Failed to load submission history");
       }
     } finally {
@@ -232,8 +436,15 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
               className="pl-10"
             />
           </div>
-          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          <Button 
+            variant="outline" 
+            className="flex items-center gap-1.5 text-xs h-10 px-3 border-slate-200 hover:bg-slate-50" 
+            onClick={handleRefresh} 
+            disabled={refreshing}
+            title="Sync latest submissions from Google Sheets & Database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'Syncing...' : 'Sync Sheet'}</span>
           </Button>
         </div>
       </div>
@@ -242,7 +453,7 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm space-y-2 shadow-sm">
           <div className="flex items-center gap-2 font-semibold text-amber-900">
             <span className="text-base">⚠️</span>
-            <span>Primary Supabase Server Offline / डेटाबेस ऑफलाइन है</span>
+            <span>Primary Supabase Server Offline </span>
           </div>
           <p className="leading-relaxed text-amber-800">
             Your primary database connection (Supabase) is currently unreachable. This usually means your free-tier Supabase project has been <strong>automatically paused</strong> due to a period of inactivity.
@@ -251,7 +462,7 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
             <strong className="block text-amber-950 mb-1">How to fix / इसे कैसे ठीक करें:</strong>
             <ol className="list-decimal pl-4 space-y-1">
               <li>Log in to your <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" className="underline font-semibold hover:text-amber-700">Supabase Dashboard ↗</a>.</li>
-              <li>Find the project <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px] border border-amber-200">xbksjtiqcwokbhuplcep</code>.</li>
+              <li>Find the project <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px] border border-amber-200">qdtmaimkoveommkgrpby</code>.</li>
               <li>Click the <strong>"Restore Project"</strong> button to bring your database back online. Once restored, please refresh this app.</li>
             </ol>
           </div>
