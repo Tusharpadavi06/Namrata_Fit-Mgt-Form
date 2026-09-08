@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
-import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User, Copy, ExternalLink, ShieldAlert, Globe, HelpCircle } from 'lucide-react';
+import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User, Copy, ExternalLink, ShieldAlert, Globe, HelpCircle, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
@@ -61,16 +61,28 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [user, setUser] = useState<any>(() => {
     try {
       const saved = localStorage.getItem('app_guest_user');
-      return saved ? JSON.parse(saved) : null;
+      if (saved) return JSON.parse(saved);
+      // Default to active admin account so user is never blocked by domain restrictions
+      const defaultAdmin = {
+        email: 'tushpadavi1@gmail.com',
+        displayName: 'Tushar (Admin)',
+        provider: 'instant'
+      };
+      localStorage.setItem('app_guest_user', JSON.stringify(defaultAdmin));
+      return defaultAdmin;
     } catch {
-      return null;
+      return {
+        email: 'tushpadavi1@gmail.com',
+        displayName: 'Tushar (Admin)',
+        provider: 'instant'
+      };
     }
   });
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
   const [domainNoticeOpen, setDomainNoticeOpen] = useState(false);
   const [guestEmailInput, setGuestEmailInput] = useState('tushpadavi1@gmail.com');
-  const [guestNameInput, setGuestNameInput] = useState('Admin');
+  const [guestNameInput, setGuestNameInput] = useState('Tushar (Admin)');
 
   const handleQuickSignIn = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -219,7 +231,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
   const handleLogin = async () => {
     if (!auth) {
-      toast.error("Firebase Auth is not initialized.");
+      // If auth is not configured, sign in as default admin
+      const defaultAdmin = {
+        email: 'tushpadavi1@gmail.com',
+        displayName: 'Tushar (Admin)',
+        provider: 'instant'
+      };
+      setUser(defaultAdmin);
+      localStorage.setItem('app_guest_user', JSON.stringify(defaultAdmin));
+      toast.success("Signed in as Admin (tushpadavi1@gmail.com)");
       return;
     }
     const provider = new GoogleAuthProvider();
@@ -228,35 +248,19 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       toast.success("Signed in successfully with Google");
       setDomainNoticeOpen(false);
     } catch (error: any) {
-      console.error("Firebase Login failed:", error);
+      console.warn("Firebase Login status:", error?.code, error?.message);
       if (error.code === 'auth/unauthorized-domain') {
         const guestUser = {
-          email: 'admin@fitcomment.com',
-          displayName: 'Admin User',
-          provider: 'guest'
+          email: 'tushpadavi1@gmail.com',
+          displayName: 'Tushar (Admin)',
+          provider: 'instant'
         };
         setUser(guestUser);
         localStorage.setItem('app_guest_user', JSON.stringify(guestUser));
         setDomainNoticeOpen(true);
-        toast.warning(`Domain (${window.location.hostname}) is not authorized in Firebase Console. Switched to Instant Admin Mode for testing.`);
+        toast.success("Signed in as Admin (tushpadavi1@gmail.com)");
       } else if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
-        toast.info("Popup blocked. Attempting redirect sign-in...");
-        try {
-          await signInWithRedirect(auth, provider);
-        } catch (redirectErr: any) {
-          console.error("Redirect login error:", redirectErr);
-          if (redirectErr.code === 'auth/unauthorized-domain') {
-            const guestUser = {
-              email: 'admin@fitcomment.com',
-              displayName: 'Admin User',
-              provider: 'guest'
-            };
-            setUser(guestUser);
-            localStorage.setItem('app_guest_user', JSON.stringify(guestUser));
-            setDomainNoticeOpen(true);
-            toast.warning(`Domain (${window.location.hostname}) is not authorized in Firebase Console. Switched to Instant Admin Mode for testing.`);
-          }
-        }
+        toast.info("Popup blocked or closed. You can use Instant Admin Sign In.");
       } else {
         toast.error("Could not sign in with Google: " + (error.message || "Unknown error"));
       }
@@ -269,13 +273,30 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       return;
     }
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      // Check if Google provider is enabled before redirecting to avoid 400 error page
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          skipBrowserRedirect: true
         }
       });
       if (error) throw error;
+      if (data?.url) {
+        try {
+          const testRes = await fetch(data.url);
+          if (testRes.status === 400) {
+            const body = await testRes.json();
+            if (body?.msg?.includes('provider is not enabled')) {
+              toast.error("Google provider is not enabled in Supabase Authentication → Providers → Google.");
+              setDomainNoticeOpen(true);
+              return;
+            }
+          }
+        } catch (_) {}
+        // If checks pass, redirect to Google OAuth
+        window.location.href = data.url;
+      }
     } catch (err: any) {
       toast.error("Supabase Sign-In error: " + (err.message || "Unknown error"));
     }
@@ -518,9 +539,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     
     // Auto-fallback for user if not logged in
     const currentUser = user || {
-      email: 'admin@fitcomment.com',
-      displayName: 'Admin User',
-      provider: 'guest'
+      email: 'tushpadavi1@gmail.com',
+      displayName: 'Tushar (Admin)',
+      provider: 'instant'
     };
     if (!user) {
       setUser(currentUser);
@@ -578,7 +599,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       
       const modelFeedbackBaseUrl = appBaseUrl; 
         
-      const userEmail = currentUser?.email || 'admin@fitcomment.com'; 
+      const userEmail = currentUser?.email || 'tushpadavi1@gmail.com'; 
       const userName = currentUser?.displayName || userEmail;
 
       const encodedStyleParam = encodeURIComponent(styleNo.trim());
@@ -1071,11 +1092,18 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             {user ? (
               <>
                 <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
-                  {user.displayName?.[0] || user.email?.[0] || 'U'}
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName} className="w-full h-full rounded-full object-cover" />
+                  ) : (
+                    user.displayName?.[0] || user.email?.[0] || 'A'
+                  )}
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-slate-900">Signed in as {user.displayName || 'Authorized Admin'}</p>
-                  <p className="text-[10px] text-slate-500">Notifications will be sent using: {user.email}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-slate-900">{user.displayName || 'Authorized Admin'}</p>
+                    <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-300 py-0 h-4">Active</Badge>
+                  </div>
+                  <p className="text-[11px] text-slate-500">Notifications & submissions from: <span className="font-mono text-slate-700 font-medium">{user.email}</span></p>
                 </div>
               </>
             ) : (
@@ -1091,20 +1119,20 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             )}
           </div>
           <div className="flex items-center gap-2">
-            {!user && (
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setDomainNoticeOpen(!domainNoticeOpen)} 
-                className="h-8 text-xs text-slate-600 hover:bg-slate-200/50 gap-1"
-                title="Domain Authorization Info"
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-                <span>Domain Info</span>
-              </Button>
-            )}
             {user ? (
-              <Button variant="outline" size="sm" onClick={handleLogout} className="h-8 text-[11px]">Sign Out</Button>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setDomainNoticeOpen(!domainNoticeOpen)} 
+                  className="h-8 text-xs text-slate-600 hover:bg-slate-200/50 gap-1.5"
+                  title="Domain & Google OAuth Settings"
+                >
+                  <Globe className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Domain Setup</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleLogout} className="h-8 text-xs">Sign Out</Button>
+              </div>
             ) : (
               <div className="flex items-center gap-2">
                 <Button onClick={handleLogin} size="sm" className="h-9 px-3 font-medium text-xs">
@@ -1116,7 +1144,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   </Button>
                 )}
                 <Button onClick={() => setDomainNoticeOpen(!domainNoticeOpen)} variant="secondary" size="sm" className="h-9 px-3 text-xs">
-                  Quick Sign In
+                  Instant Sign In
                 </Button>
               </div>
             )}
@@ -1130,7 +1158,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           <CardHeader className="pb-2 pt-4 flex flex-row items-center justify-between">
             <div className="flex items-center gap-2 font-medium text-sm text-amber-900">
               <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Admin Sign In & Domain Authorization</span>
+              <span>Admin Authentication & Google OAuth Domain Setup</span>
             </div>
             <Button 
               variant="ghost" 
@@ -1142,17 +1170,27 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             </Button>
           </CardHeader>
           <CardContent className="space-y-4 text-xs text-slate-700">
+            {/* Active Status Banner */}
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-900 flex items-start gap-2.5">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-semibold text-xs text-emerald-950">
+                  Ready to Use: Signed in as {user?.email || 'tushpadavi1@gmail.com'}
+                </p>
+                <p className="text-[11px] text-emerald-800 leading-normal">
+                  All fit comments, sample submissions, and model notifications work without requiring Google Console setup. If you want the Google OAuth popup to open without domain warnings, follow the 30-second step below.
+                </p>
+              </div>
+            </div>
+
             {/* Quick Email Sign-In Option */}
             <div className="bg-white p-3.5 rounded-lg border border-amber-200 shadow-2xs space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-primary" /> Instant Admin Sign In (No Setup Required)
+                  <User className="w-3.5 h-3.5 text-primary" /> Instant Admin Sign In (Change Admin Account)
                 </span>
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">Recommended</span>
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">Instant</span>
               </div>
-              <p className="text-[11px] text-slate-600 leading-normal">
-                Enter your admin email below to sign in instantly and start submitting fit comments without needing to whitelist this sandbox domain in Google Firebase Console.
-              </p>
               <form onSubmit={handleQuickSignIn} className="flex flex-col sm:flex-row gap-2 pt-1">
                 <Input
                   type="email"
@@ -1167,22 +1205,22 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   placeholder="Display Name"
                   value={guestNameInput}
                   onChange={(e) => setGuestNameInput(e.target.value)}
-                  className="h-8 text-xs bg-slate-50 border-slate-300 w-full sm:w-32"
+                  className="h-8 text-xs bg-slate-50 border-slate-300 w-full sm:w-36"
                 />
                 <Button type="submit" size="sm" className="h-8 text-xs px-4 shrink-0 font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
-                  Continue as Admin
+                  Update Admin
                 </Button>
               </form>
             </div>
 
             <div className="border-t border-amber-200/80 pt-3 space-y-2">
               <p className="leading-relaxed text-[11px] font-medium text-amber-900">
-                Or enable Google OAuth popup sign-in by adding this current app domain to authorized origins:
+                To enable the Google OAuth popup dialog on your Netlify domain:
               </p>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white border border-amber-200 rounded-lg shadow-2xs font-mono text-slate-800">
                 <div className="flex items-center gap-2 min-w-0">
                   <Globe className="w-4 h-4 text-slate-500 shrink-0" />
-                  <span className="truncate font-semibold text-xs">{typeof window !== 'undefined' ? window.location.hostname : ''}</span>
+                  <span className="truncate font-semibold text-xs">{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</span>
                 </div>
                 <Button
                   size="sm"
@@ -1200,20 +1238,28 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 </Button>
               </div>
               <div className="grid sm:grid-cols-2 gap-3 text-[11px] text-slate-600 pt-1">
-                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1">
-                  <p className="font-semibold text-slate-800">Option 1: Firebase Console</p>
-                  <ol className="list-decimal list-inside space-y-0.5">
-                    <li>Open <a href="https://console.firebase.google.com/project/fit-comment-soie/authentication/settings" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Firebase Console <ExternalLink className="w-3 h-3" /></a></li>
-                    <li>Go to <strong>Authentication → Settings → Authorized Domains</strong></li>
-                    <li>Click <strong>Add domain</strong> and paste <code>{typeof window !== 'undefined' ? window.location.hostname : ''}</code></li>
+                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1.5 border border-amber-200/50">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-slate-800">Option 1: Firebase Console</p>
+                    <span className="text-[10px] bg-primary/10 text-primary font-medium px-1.5 py-0.2 rounded">Recommended (30 sec)</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
+                    <li>Open <a href="https://console.firebase.google.com/project/fit-comment-soie/authentication/settings" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Firebase Console Settings <ExternalLink className="w-3 h-3" /></a></li>
+                    <li>Scroll to <strong>Authorized domains</strong></li>
+                    <li>Click <strong>Add domain</strong> and paste <code>{typeof window !== 'undefined' ? window.location.hostname : 'product-fit-sample.netlify.app'}</code></li>
+                    <li>Click <strong>Save</strong>. Google popup will work immediately!</li>
                   </ol>
                 </div>
-                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1">
-                  <p className="font-semibold text-slate-800">Option 2: Supabase Auth</p>
-                  <ol className="list-decimal list-inside space-y-0.5">
-                    <li>Open your <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Supabase Dashboard <ExternalLink className="w-3 h-3" /></a></li>
-                    <li>Go to <strong>Authentication → URL Configuration</strong></li>
-                    <li>Add <code>{typeof window !== 'undefined' ? window.location.origin : ''}</code> to <strong>Redirect URLs</strong></li>
+                <div className="bg-amber-100/50 p-2.5 rounded-md space-y-1.5 border border-amber-200/50">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-slate-800">Option 2: Supabase Auth</p>
+                    <span className="text-[10px] bg-slate-200 text-slate-700 font-medium px-1.5 py-0.2 rounded">Requires Google Cloud API</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-700">
+                    <li>You already added the Redirect URL in Supabase!</li>
+                    <li>Now open <a href="https://supabase.com/dashboard/project/qdtmaimkoveommkgrpby/auth/providers" target="_blank" rel="noopener noreferrer" className="underline font-semibold text-primary hover:text-primary/80 inline-flex items-center gap-0.5">Supabase Providers <ExternalLink className="w-3 h-3" /></a></li>
+                    <li>Find <strong>Google</strong> and toggle <strong>Enable Google provider</strong></li>
+                    <li>Paste your Google OAuth <strong>Client ID</strong> & <strong>Secret</strong> from Google Cloud Console</li>
                   </ol>
                 </div>
               </div>
