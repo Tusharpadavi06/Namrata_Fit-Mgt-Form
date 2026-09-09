@@ -2,15 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
-import { v4 as uuidv4 } from 'uuid';
-import { isValidUuid } from '../lib/models-service';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Loader2, Search, ExternalLink, RefreshCw, Calendar, User, Tag, Plus } from 'lucide-react';
+import { Loader2, Search, ExternalLink, RefreshCw, Calendar, User, Tag, Plus, FileSpreadsheet } from 'lucide-react';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { toast } from 'sonner';
+import { syncFullSubmissionToGoogleSheets } from '../services/googleSheetsService';
+import { GoogleSheetsModal } from './GoogleSheetsModal';
 
 interface Submission {
   id: string;
@@ -45,6 +45,9 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [supabaseFailed, setSupabaseFailed] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [sheetsModalOpen, setSheetsModalOpen] = useState(false);
 
   const getRoundDate = (assignment: any, round: string) => {
     const rData = assignment[`round${round}`];
@@ -58,124 +61,6 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
     // Fallback to base color for round 1 if round1 object doesn't have it
     if (round === '1') return assignment.color || '-';
     return '-';
-  };
-
-  const fetchGoogleSheetsSubmissions = async (): Promise<Submission[]> => {
-    const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
-    const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
-    const submissionsMap = new Map<string, Submission>();
-
-    for (const tab of tabs) {
-      try {
-        const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&headers=1&sheet=${encodeURIComponent(tab)}`);
-        const text = await res.text();
-        const json = JSON.parse(text.substring(47).slice(0, -2));
-        const rows = json.table?.rows || [];
-
-        rows.forEach((r: any) => {
-          const cells = (r.c || []).map((cell: any) => cell ? String(cell.f || cell.v || '') : '');
-          const timestamp = cells[0] || '';
-          const modelName = cells[1] || '';
-          const sampleType = cells[2] || '';
-          const styleNo = cells[3] || '';
-          const description = cells[4] || '';
-          const size = cells[5] || '';
-          const color = cells[6] || '';
-          let fitDate = cells[7] || '';
-          if (fitDate.startsWith('Date(')) {
-            const parts = fitDate.replace(/Date\(|\)/g, '').split(',');
-            if (parts.length >= 3) {
-              const y = parts[0].trim();
-              const m = String(parseInt(parts[1].trim()) + 1).padStart(2, '0');
-              const d = parts[2].trim().padStart(2, '0');
-              fitDate = `${d}/${m}/${y}`;
-            }
-          }
-          const aId = cells[49] || '';
-
-          if (!styleNo || styleNo.toLowerCase().includes('style no') || !modelName) return;
-
-          const subKey = styleNo.trim().toUpperCase();
-          if (!submissionsMap.has(subKey)) {
-            submissionsMap.set(subKey, {
-              id: aId ? `sheet-${styleNo.trim()}` : uuidv4(),
-              style_number: styleNo.trim(),
-              type_of_sample: sampleType || 'Sample',
-              description: description || '',
-              series: tab,
-              created_at: timestamp ? new Date().toISOString() : new Date().toISOString(),
-              submitted_by: 'Google Sheets',
-              assignments: []
-            });
-          }
-
-          const sub = submissionsMap.get(subKey)!;
-          const alreadyAssigned = sub.assignments?.some(
-            (a: any) => (aId && a.id === aId) || (a.model_name === modelName && a.size === size)
-          );
-
-          if (!alreadyAssigned) {
-            sub.assignments = sub.assignments || [];
-            sub.assignments.push({
-              id: aId || uuidv4(),
-              model_name: modelName,
-              model_email: '',
-              color: color,
-              size: size,
-              round1: {
-                color,
-                given_for_fit_date: fitDate,
-                received_date: cells[8] || '',
-                comments_received_date: cells[9] || '',
-                before_wash: cells[10] || '',
-                after_wash: cells[11] || '',
-                fabric_trims: cells[12] || ''
-              },
-              round2: {
-                color: cells[14] || '',
-                given_for_fit_date: cells[15] || '',
-                received_date: cells[16] || '',
-                comments_received_date: cells[17] || '',
-                before_wash: cells[18] || '',
-                after_wash: cells[19] || '',
-                fabric_trims: cells[20] || ''
-              },
-              round3: {
-                color: cells[22] || '',
-                given_for_fit_date: cells[23] || '',
-                received_date: cells[24] || '',
-                comments_received_date: cells[25] || '',
-                before_wash: cells[26] || '',
-                after_wash: cells[27] || '',
-                fabric_trims: cells[28] || ''
-              },
-              round4: {
-                color: cells[30] || '',
-                given_for_fit_date: cells[31] || '',
-                received_date: cells[32] || '',
-                comments_received_date: cells[33] || '',
-                before_wash: cells[34] || '',
-                after_wash: cells[35] || '',
-                fabric_trims: cells[36] || ''
-              },
-              round5: {
-                color: cells[38] || '',
-                given_for_fit_date: cells[39] || '',
-                received_date: cells[40] || '',
-                comments_received_date: cells[41] || '',
-                before_wash: cells[42] || '',
-                after_wash: cells[43] || '',
-                fabric_trims: cells[44] || ''
-              }
-            });
-          }
-        });
-      } catch (err) {
-        console.warn(`Error reading sheet tab ${tab}:`, err);
-      }
-    }
-
-    return Array.from(submissionsMap.values());
   };
 
   const fetchSubmissions = async () => {
@@ -197,71 +82,13 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         throw error;
       }
 
-      let currentList: Submission[] = [];
-      if (data && data.length > 0) {
-        currentList = (data as any) as Submission[];
+      if (data) {
+        setSubmissions(data as any);
+        setSupabaseFailed(false);
+        try {
+          localStorage.setItem('history_cache', JSON.stringify(data));
+        } catch (_) {}
       }
-
-      // Merge Google Sheets data to guarantee full parity with Google Sheets
-      try {
-        const sheetSubs = await fetchGoogleSheetsSubmissions();
-        for (const sSub of sheetSubs) {
-          const matchIdx = currentList.findIndex(
-            item => item.style_number?.trim().toUpperCase() === sSub.style_number?.trim().toUpperCase()
-          );
-          if (matchIdx === -1) {
-            // Missing in Supabase! Add to display
-            currentList.push(sSub);
-            // Self-heal into Supabase in background
-            const newSubId = uuidv4();
-            supabase.from('submissions').upsert({
-              id: newSubId,
-              style_number: sSub.style_number,
-              type_of_sample: sSub.type_of_sample,
-              description: sSub.description,
-              series: sSub.series,
-              submitted_by: 'admin@fitcomment.com'
-            }).then(() => {
-              if (sSub.assignments && sSub.assignments.length > 0) {
-                const assInserts = sSub.assignments.map(a => ({
-                  id: a.id && isValidUuid(a.id) ? a.id : uuidv4(),
-                  submission_id: newSubId,
-                  model_name: a.model_name,
-                  model_email: a.model_email || '',
-                  color: a.color || '',
-                  size: a.size || '',
-                  round1: a.round1 || {},
-                  round2: a.round2 || {},
-                  round3: a.round3 || {}
-                }));
-                supabase.from('assignments').upsert(assInserts).then(() => {});
-              }
-            });
-          } else {
-            // Merge assignments & rounds
-            const existing = currentList[matchIdx];
-            const existingAssIds = new Set((existing.assignments || []).map((a: any) => a.id));
-            const existingAssNames = new Set((existing.assignments || []).map((a: any) => `${a.model_name}_${a.size}`));
-            for (const a of sSub.assignments || []) {
-              if (!existingAssIds.has(a.id) && !existingAssNames.has(`${a.model_name}_${a.size}`)) {
-                existing.assignments = existing.assignments || [];
-                existing.assignments.push(a);
-              }
-            }
-          }
-        }
-      } catch (sheetMergeErr) {
-        console.warn("Failed to merge from Google Sheets:", sheetMergeErr);
-      }
-
-      // Sort chronologically descending
-      currentList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      setSubmissions(currentList);
-      setSupabaseFailed(false);
-      try {
-        localStorage.setItem('history_cache', JSON.stringify(currentList));
-      } catch (_) {}
     } catch (err) {
       setSupabaseFailed(true);
       // Defer-loaded, resilient chunked Firestore fallback
@@ -419,32 +246,92 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
     fetchSubmissions();
   };
 
+  const handleSyncSingle = async (sub: Submission) => {
+    setSyncingId(sub.id);
+    try {
+      const res = await syncFullSubmissionToGoogleSheets(sub, '1', true);
+      if (res.success) {
+        toast.success(`Style ${sub.style_number} (${res.syncedCount} assignments) synced to Google Sheet & emails triggered!`);
+      } else {
+        if (res.errors.some(e => e.includes('401') || e.includes('Unauthorized') || e.includes('CORS'))) {
+          toast.error("Google Sheets 401 Unauthorized: 'Who has access' must be 'Anyone'. Opening connection settings...");
+          setSheetsModalOpen(true);
+        } else {
+          toast.error(`Sync warning: ${res.errors.join(", ")}`);
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to sync to Google Sheets");
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const handleSyncAllToGoogleSheets = async () => {
+    if (filteredSubmissions.length === 0) return;
+    setSyncingAll(true);
+    let successCount = 0;
+    let failedCount = 0;
+
+    toast.info(`Starting sync of ${filteredSubmissions.length} styles to Google Sheets...`);
+
+    for (const sub of filteredSubmissions) {
+      try {
+        const res = await syncFullSubmissionToGoogleSheets(sub, '1', false);
+        if (res.success) {
+          successCount++;
+        } else {
+          failedCount++;
+          if (res.errors.some(e => e.includes('401') || e.includes('Unauthorized') || e.includes('CORS'))) {
+            toast.error("Google Apps Script 401 Unauthorized: Please check 'Who has access' in Apps Script.");
+            setSheetsModalOpen(true);
+            break;
+          }
+        }
+      } catch (_) {
+        failedCount++;
+      }
+    }
+
+    setSyncingAll(false);
+    if (successCount > 0) {
+      toast.success(`Successfully synced ${successCount} styles to Google Sheets!`);
+    }
+    if (failedCount > 0 && successCount === 0) {
+      toast.error("Google Sheets sync failed. Please check the Google Sheets & Mail settings.");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Submission History</h2>
-          <p className="text-sm text-slate-500">View and manage previous sample fit requests</p>
+          <p className="text-sm text-slate-500">View, manage, and sync sample fit requests to Google Sheets</p>
         </div>
-        <div className="flex w-full md:w-auto gap-2">
-          <div className="relative flex-1 md:w-64">
+        <div className="flex flex-wrap w-full md:w-auto gap-2 items-center">
+          <div className="relative flex-1 md:w-56">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input 
               placeholder="Search style or series..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
+              className="pl-10 h-9 text-xs"
             />
           </div>
           <Button 
             variant="outline" 
-            className="flex items-center gap-1.5 text-xs h-10 px-3 border-slate-200 hover:bg-slate-50" 
-            onClick={handleRefresh} 
-            disabled={refreshing}
-            title="Sync latest submissions from Google Sheets & Database"
+            size="sm" 
+            onClick={handleSyncAllToGoogleSheets} 
+            disabled={syncingAll || loading || filteredSubmissions.length === 0}
+            className="gap-1.5 text-xs border-emerald-200 text-emerald-800 hover:bg-emerald-50 h-9"
+            title="Sync all listed styles to Google Sheet"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>{refreshing ? 'Syncing...' : 'Sync Sheet'}</span>
+            <FileSpreadsheet className={`w-3.5 h-3.5 text-emerald-600 ${syncingAll ? 'animate-spin' : ''}`} />
+            <span>{syncingAll ? 'Syncing...' : 'Sync All to Sheet'}</span>
+          </Button>
+          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={refreshing} className="h-9 w-9">
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
@@ -462,7 +349,7 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
             <strong className="block text-amber-950 mb-1">How to fix / इसे कैसे ठीक करें:</strong>
             <ol className="list-decimal pl-4 space-y-1">
               <li>Log in to your <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" className="underline font-semibold hover:text-amber-700">Supabase Dashboard ↗</a>.</li>
-              <li>Find the project <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px] border border-amber-200">qdtmaimkoveommkgrpby</code>.</li>
+              <li>Find the project <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px] border border-amber-200">xbksjtiqcwokbhuplcep</code>.</li>
               <li>Click the <strong>"Restore Project"</strong> button to bring your database back online. Once restored, please refresh this app.</li>
             </ol>
           </div>
@@ -538,7 +425,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right pr-6">
-                            <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="h-8 text-[11px] border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 gap-1 px-2 font-medium"
+                                title="Sync this style to Google Sheet & trigger emails"
+                                disabled={syncingId === sub.id}
+                                onClick={() => handleSyncSingle(sub)}
+                              >
+                                <FileSpreadsheet className={`w-3.5 h-3.5 ${syncingId === sub.id ? 'animate-spin' : ''}`} />
+                                <span className="hidden sm:inline">Sync Sheet</span>
+                              </Button>
                               <Button 
                                 variant="outline" 
                                 size="sm" 
@@ -656,6 +554,8 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
           )}
         </CardContent>
       </Card>
+
+      <GoogleSheetsModal isOpen={sheetsModalOpen} onOpenChange={setSheetsModalOpen} />
     </div>
   );
 }

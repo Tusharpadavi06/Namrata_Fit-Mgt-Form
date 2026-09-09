@@ -1,137 +1,170 @@
-# Google Apps Script for Fit Comment System
+# Google Apps Script for Fit Comment System & Email Delivery
 
-This script facilitates synchronization between the React app and Google Sheets. It handles new submissions, round updates, and mailing links to models.
+This script synchronizes your React application with your Google Sheet and sends notification emails to models via `MailApp`.
 
-## Installation Instructions
+---
 
-1. Open your Google Sheet.
-2. Go to **Extensions** > **Apps Script**.
-3. Delete any existing code and paste the script provided below.
-4. **Crucial**: Ensure you have added the Spreadsheet ID to your AI Studio **Settings** as `VITE_GOOGLE_SHEET_ID`. The ID is the long string in the Sheet's URL.
-5. Click **Deploy** > **New Deployment**.
-6. Select **Type**: **Web App**.
-7. **Description**: "Fit Comment Sync".
-8. **Execute as**: **Me**.
-9. **Who has access**: **Anyone** (this is necessary for the React app to communicate with the script).
-10. Click **Deploy**, authorize permissions, and copy the **Web App URL**.
-11. Add this URL to your AI Studio **Settings** as `VITE_GOOGLE_SHEETS_WEBHOOK_URL`.
+## ⚠️ CRITICAL SETUP: WHY SYNC / MAIL FAILS WITH 401 ERROR
 
-## The Script
+If data is saving in Supabase/App but **NOT** in Google Sheet or Email:
+The #1 cause is that Google Apps Script was deployed with **"Who has access: Only myself"**.
+When deployed this way, Google blocks the React app and returns **401 Unauthorized / Google Login redirect**.
+
+### 🔧 1-Minute Fix:
+1. Open your Google Sheet: `https://docs.google.com/spreadsheets/d/1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4/edit`
+2. In the top menu, go to **Extensions** > **Apps Script**.
+3. Replace all code in the editor with the script below.
+4. Click the blue **Deploy** button (top right) > **Manage Deployments**.
+5. Click the **Pencil (Edit)** icon next to your active deployment.
+6. Under **Version**, select **New version**.
+7. Under **Who has access**, select **Anyone** (Do NOT choose "Only myself").
+8. Click **Deploy**.
+9. If Google asks for authorization:
+   - Click **Review permissions**
+   - Choose your Google account (`tushpadavi1@gmail.com`)
+   - Click **Advanced** > **Go to Fit Comment Sync (unsafe)**
+   - Click **Allow**
+10. Copy the Web App URL (ends in `/exec`) and paste it into the app's **Google Sheets & Mail Settings** dialog or AI Studio settings!
+
+---
+
+## The Complete Script Code
+
+Copy and paste this into your Google Apps Script editor (`Code.gs`):
 
 ```javascript
+/**
+ * Fit Comment System - Google Apps Script Web App
+ * Handles dual-write row insertion/updates and automated model email notifications.
+ */
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "ok",
+    message: "Fit Comment Google Apps Script is ACTIVE!",
+    timestamp: new Date().toISOString()
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
-    // 1. Acquire lock for 30 seconds to prevent race conditions during parallel submissions
+    // 1. Acquire lock for up to 30 seconds to prevent race conditions during multiple parallel submissions
     lock.waitLock(30000);
+    
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService.createTextOutput("Error: No POST body provided").setMimeType(ContentService.MimeType.TEXT);
+    }
     
     var contents = e.postData.contents;
     var data = JSON.parse(contents);
     
-    // 2. Identify the Spreadsheet
+    // 2. Identify the target Spreadsheet
     var ss;
-    if (data.sheetId) {
-      ss = SpreadsheetApp.openById(data.sheetId);
-    } else {
+    var targetSheetId = data.sheetId || data.spreadsheetId || "1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4";
+    try {
+      ss = SpreadsheetApp.openById(targetSheetId);
+    } catch (err) {
       ss = SpreadsheetApp.getActiveSpreadsheet();
     }
     
     if (!ss) {
-      throw new Error("Spreadsheet not found. Check ID or binding.");
+      return ContentService.createTextOutput("Error: Spreadsheet not found. Check Spreadsheet ID.").setMimeType(ContentService.MimeType.TEXT);
     }
     
-    // 3. Handle explicit EMAIL trigger
+    // 3. Handle Health Ping test
+    if (data.type === 'PING_TEST') {
+      return ContentService.createTextOutput("Success: Google Apps Script & Sheet connected successfully!").setMimeType(ContentService.MimeType.TEXT);
+    }
+    
+    // 4. Handle standalone EMAIL trigger
     if (data.type === 'SEND_MAIL') {
       return sendMail(data);
     }
     
-    // 4. Identify the target sheet (Series based)
+    // 5. Identify the target sheet (Series based: General, A, B, etc.)
     var sheetName = data.tabName || "General";
     var sheet = getSheetWithHeaders(ss, sheetName);
     
-    // 5. Find or create the row
+    // 6. Find or create the row
     var assignmentId = data.assignmentId || data.id;
     var row = -1;
     
-    // ALWAYS search for existing record if assignmentId is present
     if (assignmentId) {
-       row = findRow(sheet, assignmentId);
+      row = findRow(sheet, assignmentId);
     }
     
     if (row === -1) {
-      // NEW SUBMISSION: Append a truly new row at the bottom
+      // NEW SUBMISSION: Append a new row at the bottom
       row = sheet.getLastRow() + 1;
       
-      // Ensure the sheet has enough columns
+      // Ensure the sheet has at least 60 columns
       if (sheet.getMaxColumns() < 60) {
         sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
       }
       
-      // Initialize basic identifying markers
-      updateCell(sheet, row, "AX", assignmentId); // ID in column AX (50)
-      updateCell(sheet, row, "A", data.timestamp || new Date());
+      // Unique tracking ID in Column AX (50) and Creation Timestamp in Column A
+      updateCell(sheet, row, "AX", assignmentId);
+      updateCell(sheet, row, "A", data.timestamp || new Date().toLocaleString());
     }
     
-    // 6. UPDATE FIELDS (B-F are general)
+    // 7. Update General Sample Information (Columns B to F)
     updateCell(sheet, row, "B", data.modelName || data.B);
     updateCell(sheet, row, "C", data.sampleType || data.typeOfSample || data.C);
-    updateCell(sheet, row, "D", data.styleNo || data.D);
+    updateCell(sheet, row, "D", data.styleNo || data.style_number || data.D);
     updateCell(sheet, row, "E", data.description || data.Instructions || data.E);
     updateCell(sheet, row, "F", data.size || data.F);
     
-    // 7. Update round-specific data (Revised to match user requested mapping)
+    // 8. Update Round-Specific Data
     var round = String(data.round || "1");
     
     if (round === "1") {
       updateCell(sheet, row, "G", data.color || data.G);
-      updateCell(sheet, row, "H", data.givenForFitDate || data.H);
+      updateCell(sheet, row, "H", data.givenForFitDate || data.given_for_fit_date || data.H);
       updateCell(sheet, row, "I", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.I);
-      updateCell(sheet, row, "J", data.receivedDate || data.received_date || data.J);
+      updateCell(sheet, row, "J", data.receivedDate || data.received_date || data.fit_date || data.J);
       updateCell(sheet, row, "K", data.beforeWash || data.before_wash || data.K);
       updateCell(sheet, row, "L", data.afterWash || data.after_wash || data.L);
       updateCell(sheet, row, "M", data.fabricComments || data.fabricTrims || data.fabric_trims || data.M);
-      // Removed Link from N
     } 
     else if (round === "2") {
       updateCell(sheet, row, "O", data.color || data.O);
-      updateCell(sheet, row, "P", data.givenForFitDate || data.P); 
+      updateCell(sheet, row, "P", data.givenForFitDate || data.given_for_fit_date || data.P); 
       updateCell(sheet, row, "Q", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Q); 
-      updateCell(sheet, row, "R", data.receivedDate || data.received_date || data.R);
+      updateCell(sheet, row, "R", data.receivedDate || data.received_date || data.fit_date || data.R);
       updateCell(sheet, row, "S", data.beforeWash || data.before_wash || data.S);
       updateCell(sheet, row, "T", data.afterWash || data.after_wash || data.T);
       updateCell(sheet, row, "U", data.fabricComments || data.fabricTrims || data.fabric_trims || data.U);
-      // Removed Link from V
-    } 
+    }
     else if (round === "3") {
-      updateCell(sheet, row, "W", data.color || data.W); 
-      updateCell(sheet, row, "X", data.givenForFitDate || data.X); 
-      updateCell(sheet, row, "Y", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Y); 
-      updateCell(sheet, row, "Z", data.receivedDate || data.received_date || data.Z);
+      updateCell(sheet, row, "W", data.color || data.W);
+      updateCell(sheet, row, "X", data.givenForFitDate || data.given_for_fit_date || data.X);
+      updateCell(sheet, row, "Y", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Y);
+      updateCell(sheet, row, "Z", data.receivedDate || data.received_date || data.fit_date || data.Z);
       updateCell(sheet, row, "AA", data.beforeWash || data.before_wash || data.AA);
       updateCell(sheet, row, "AB", data.afterWash || data.after_wash || data.AB);
       updateCell(sheet, row, "AC", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AC);
-      // Removed Link from AD
     }
     else if (round === "4") {
-      updateCell(sheet, row, "AE", data.color || data.AE); 
-      updateCell(sheet, row, "AF", data.givenForFitDate || data.AF); 
-      updateCell(sheet, row, "AG", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AG); 
-      updateCell(sheet, row, "AH", data.receivedDate || data.received_date || data.AH);
+      updateCell(sheet, row, "AE", data.color || data.AE);
+      updateCell(sheet, row, "AF", data.givenForFitDate || data.given_for_fit_date || data.AF);
+      updateCell(sheet, row, "AG", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AG);
+      updateCell(sheet, row, "AH", data.receivedDate || data.received_date || data.fit_date || data.AH);
       updateCell(sheet, row, "AI", data.beforeWash || data.before_wash || data.AI);
       updateCell(sheet, row, "AJ", data.afterWash || data.after_wash || data.AJ);
       updateCell(sheet, row, "AK", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AK);
     }
     else if (round === "5") {
-      updateCell(sheet, row, "AM", data.color || data.AM); 
-      updateCell(sheet, row, "AN", data.givenForFitDate || data.AN); 
-      updateCell(sheet, row, "AO", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AO); 
-      updateCell(sheet, row, "AP", data.receivedDate || data.received_date || data.AP);
+      updateCell(sheet, row, "AM", data.color || data.AM);
+      updateCell(sheet, row, "AN", data.givenForFitDate || data.given_for_fit_date || data.AN);
+      updateCell(sheet, row, "AO", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AO);
+      updateCell(sheet, row, "AP", data.receivedDate || data.received_date || data.fit_date || data.AP);
       updateCell(sheet, row, "AQ", data.beforeWash || data.before_wash || data.AQ);
       updateCell(sheet, row, "AR", data.afterWash || data.after_wash || data.AR);
       updateCell(sheet, row, "AS", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AS);
     }
     
-    // 8. Handle automatic email notification
+    // 9. Handle automatic email notification
     if (data.triggerEmail) {
       sendMail(data);
     }
@@ -139,110 +172,173 @@ function doPost(e) {
     return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
     
   } catch (err) {
+    Logger.log("doPost Error: " + err.message);
     return ContentService.createTextOutput("Error: " + err.message).setMimeType(ContentService.MimeType.TEXT);
   } finally {
-    // 9. Always release the lock
     lock.releaseLock();
   }
 }
 
-function getSheetWithHeaders(ss, sheetName) {
-  var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-    var headers = [
-      "Timestamp", "Model Name", "Type of sample", "Style no", "Description", "Size", 
-      "R1 Color", "R1 Fit Date", "R1 Comments Date", "R1 Received", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims", "R1 Feedback",
-      "R2 Color", "R2 Fit Date", "R2 Comments Date", "R2 Received", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims", "R2 Feedback",
-      "R3 Color", "R3 Fit Date", "R3 Comments Date", "R3 Received", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback",
-      "R4 Color", "R4 Fit Date", "R4 Comments Date", "R4 Received", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims", "R4 Feedback",
-      "R5 Color", "R5 Fit Date", "R5 Comments Date", "R5 Received", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback"
-    ];
-    sheet.appendRow(headers);
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, headers.length).setBackground("#f3f4f6").setFontWeight("bold");
-  }
-  return sheet;
-}
-
+/**
+ * Searches column AX (50) for the assignmentId
+ */
 function findRow(sheet, assignmentId) {
-  if (!assignmentId) return -1;
   var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return -1;
+  if (lastRow <= 1) return -1;
   
-  var ids = sheet.getRange(1, 50, lastRow, 1).getValues();
-  var targetId = String(assignmentId).trim().toLowerCase();
+  var axColIndex = 50; // AX is column 50
+  if (sheet.getMaxColumns() < axColIndex) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), axColIndex - sheet.getMaxColumns());
+  }
   
-  for (var i = 1; i < ids.length; i++) {
-    var sheetId = String(ids[i][0]).trim().toLowerCase();
-    if (sheetId === targetId) return i + 1;
+  var range = sheet.getRange(2, axColIndex, lastRow - 1, 1);
+  var values = range.getValues();
+  
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]).trim() === String(assignmentId).trim()) {
+      return i + 2; // +2 for 1-based index and header row
+    }
   }
   return -1;
 }
 
-function updateCell(sheet, row, colName, value) {
-  if (value === undefined || value === null || value === "") return;
-  var colMap = {
-    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8, "I": 9, "J": 10,
-    "K": 11, "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20,
-    "U": 21, "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26, "AA": 27, "AB": 28, "AC": 29, "AD": 30,
-    "AE": 31, "AF": 32, "AG": 33, "AH": 34, "AI": 35, "AJ": 36, "AK": 37, "AL": 38, "AM": 39, "AN": 40,
-    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AX": 50
-  };
-  var colIndex = colMap[colName.toUpperCase()];
-  if (colIndex) {
-    sheet.getRange(row, colIndex).setValue(value);
+/**
+ * Sends a notification email to the model using MailApp
+ */
+function sendMail(data) {
+  var recipient = data.modelEmail || data.model_email || data.email || data.recipientEmail || data.recipient;
+  if (!recipient) {
+    return ContentService.createTextOutput("Email skipped: No recipient email").setMimeType(ContentService.MimeType.TEXT);
+  }
+  
+  var link = data.link || data.responseUrl || "";
+  var round = data.round || "1";
+  var style = data.styleNo || data.style_number || "Garment";
+  var subject = "Action Required: Fit Comments for Style " + style + " (Round " + round + ")";
+  
+  var htmlBody = '<div style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">'
+    + '<div style="border-bottom: 2px solid #6366f1; padding-bottom: 12px; margin-bottom: 16px;">'
+    + '<h2 style="color: #4338ca; margin: 0; font-size: 20px;">Fit Feedback Request</h2>'
+    + '<p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Namrata Fit Comment Management System</p>'
+    + '</div>'
+    + '<p style="font-size: 14px; line-height: 1.5;">Hello <strong>' + (data.modelName || "Model") + '</strong>,</p>'
+    + '<p style="font-size: 14px; line-height: 1.5;">You have been assigned a garment sample for fit review. Please try on the sample and submit your feedback:</p>'
+    + '<div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin: 20px 0; border: 1px solid #e2e8f0;">'
+    + '<table style="width: 100%; font-size: 13px; border-collapse: collapse;">'
+    + '<tr><td style="padding: 4px 0; color: #64748b;">Style Number:</td><td style="font-weight: bold; color: #0f172a;">' + style + '</td></tr>'
+    + '<tr><td style="padding: 4px 0; color: #64748b;">Sample Type:</td><td style="font-weight: bold; color: #0f172a;">' + (data.sampleType || "N/A") + '</td></tr>'
+    + '<tr><td style="padding: 4px 0; color: #64748b;">Size:</td><td style="font-weight: bold; color: #0f172a;">' + (data.size || "N/A") + '</td></tr>'
+    + '<tr><td style="padding: 4px 0; color: #64748b;">Round:</td><td style="font-weight: bold; color: #4338ca;">Round ' + round + '</td></tr>'
+    + '</table>'
+    + '</div>'
+    + (link ? '<div style="text-align: center; margin: 28px 0;">'
+    + '<a href="' + link + '" style="background-color: #4f46e5; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 14px; box-shadow: 0 2px 4px rgba(79,70,229,0.2);">Open Fit Feedback Form</a>'
+    + '</div>'
+    + '<p style="font-size: 12px; color: #94a3b8; word-break: break-all;">Direct Link: <a href="' + link + '" style="color: #6366f1;">' + link + '</a></p>' : '')
+    + '<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 12px 0;" />'
+    + '<p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">Automated notification sent via Google Apps Script & MailApp</p>'
+    + '</div>';
+  
+  try {
+    MailApp.sendEmail({
+      to: recipient,
+      subject: subject,
+      htmlBody: htmlBody,
+      replyTo: data.senderEmail || undefined,
+      name: (data.senderName || "Fit Comment System")
+    });
+    return ContentService.createTextOutput("Success: Email Sent to " + recipient).setMimeType(ContentService.MimeType.TEXT);
+  } catch (err) {
+    Logger.log("MailApp.sendEmail failed: " + err.message);
+    return ContentService.createTextOutput("Mail Error: " + err.message).setMimeType(ContentService.MimeType.TEXT);
   }
 }
 
-function sendMail(data) {
-  var recipient = data.modelEmail || data.senderEmail;
-  if (!recipient || (!data.link && !data.responseUrl)) return ContentService.createTextOutput("Email missing recipient or link").setMimeType(ContentService.MimeType.TEXT);
-  
-  var link = data.link || data.responseUrl;
-  var round = data.round || "1";
-  var subject = "Action Required: Fit Comments for Style " + (data.styleNo || "New") + " (Round " + round + ")";
-  
-  var htmlBody = 
-    "<div style='font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;'>" +
-      "<div style='background-color: #4f46e5; padding: 30px; text-align: center; color: white;'>" +
-        "<h1 style='margin: 0; font-size: 24px;'>Fit Feedback Required</h1>" +
-        "<p style='margin: 10px 0 0; opacity: 0.9;'>Round " + round + " Request</p>" +
-      "</div>" +
-      "<div style='padding: 30px; background-color: white;'>" +
-        "<p>Hello <strong>" + (data.modelName || "Model") + "</strong>,</p>" +
-        "<p>You have a new sample fit request that requires your feedback. Please click the button below to provide your comments:</p>" +
-        "<div style='text-align: center; margin: 40px 0;'>" +
-          "<a href='" + link + "' style='background-color: #4338ca; color: white; padding: 14px 35px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);'>Open Feedback Form</a>" +
-        "</div>" +
-        "<hr style='border: 0; border-top: 1px solid #e2e8f0; margin: 30px 0;'>" +
-        "<p style='color: #4f46e5; font-size: 13px; word-break: break-all;'>" + link + "</p>" +
-      "</div>" +
-    "</div>";
+/**
+ * Updates a specific cell using A1 notation
+ */
+function updateCell(sheet, row, colLetter, val) {
+  if (val === undefined || val === null) return;
+  sheet.getRange(colLetter + row).setValue(val);
+}
 
-  MailApp.sendEmail({
-    to: recipient,
-    subject: subject,
-    htmlBody: htmlBody,
-    replyTo: data.senderEmail,
-    name: (data.senderName || "Fit Comment System")
-  });
+/**
+ * Ensures standard headers exist on the sheet
+ */
+function getSheetWithHeaders(ss, sheetName) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
   
-  return ContentService.createTextOutput("Email Sent").setMimeType(ContentService.MimeType.TEXT);
+  if (sheet.getMaxColumns() < 60) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
+  }
+  
+  if (sheet.getLastRow() === 0) {
+    var headers = [];
+    headers[0] = "Timestamp";
+    headers[1] = "Model Name";
+    headers[2] = "Sample Type";
+    headers[3] = "Style No";
+    headers[4] = "Description";
+    headers[5] = "Size";
+    
+    // Round 1 (G - M)
+    headers[6] = "R1 Color";
+    headers[7] = "R1 Given Date";
+    headers[8] = "R1 Comments Date";
+    headers[9] = "R1 Received Date";
+    headers[10] = "R1 Before Wash";
+    headers[11] = "R1 After Wash";
+    headers[12] = "R1 Fabric/Trims";
+    headers[13] = "R1 Link";
+    
+    // Round 2 (O - U)
+    headers[14] = "R2 Color";
+    headers[15] = "R2 Given Date";
+    headers[16] = "R2 Comments Date";
+    headers[17] = "R2 Received Date";
+    headers[18] = "R2 Before Wash";
+    headers[19] = "R2 After Wash";
+    headers[20] = "R2 Fabric/Trims";
+    headers[21] = "R2 Link";
+    
+    // Round 3 (W - AC)
+    headers[22] = "R3 Color";
+    headers[23] = "R3 Given Date";
+    headers[24] = "R3 Comments Date";
+    headers[25] = "R3 Received Date";
+    headers[26] = "R3 Before Wash";
+    headers[27] = "R3 After Wash";
+    headers[28] = "R3 Fabric/Trims";
+    headers[29] = "R3 Link";
+
+    // Round 4 (AE - AK)
+    headers[30] = "R4 Color";
+    headers[31] = "R4 Given Date";
+    headers[32] = "R4 Comments Date";
+    headers[33] = "R4 Received Date";
+    headers[34] = "R4 Before Wash";
+    headers[35] = "R4 After Wash";
+    headers[36] = "R4 Fabric/Trims";
+    headers[37] = "R4 Link";
+
+    // Round 5 (AM - AS)
+    headers[38] = "R5 Color";
+    headers[39] = "R5 Given Date";
+    headers[40] = "R5 Comments Date";
+    headers[41] = "R5 Received Date";
+    headers[42] = "R5 Before Wash";
+    headers[43] = "R5 After Wash";
+    headers[44] = "R5 Fabric/Trims";
+    headers[45] = "R5 Link";
+    
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 50).setValue("AssignmentId");
+    sheet.getRange(1, 1, 1, 50).setFontWeight("bold").setBackground("#f1f5f9");
+  }
+  
+  return sheet;
 }
 ```
-```
-
-## Logic Explained
-
-1. **Mapping Style to Series**: The script automatically detects the series (CB, FB, etc.) from the style number and puts it in the correct tab.
-2. **Row Tracking**: It uses a hidden column (Column AX) to store the Assignment ID. This ensures that when you update a form for Round 2 or 3, it finds the *exact* same row and updates it instead of creating a new one.
-3. **Column Logic**:
-   - **B-F**: Basic information (Model, Type, Style, Description, Size).
-   - **G-M**: Round 1 feedback.
-   - **O-U**: Round 2 feedback.
-   - **W-AC**: Round 3 feedback.
-   - **AE-AK**: Round 4 feedback.
-   - **AM-AS**: Round 5 feedback.
-   - **N, V, AD, AL, AR**: Feedback columns without links.
-4. **Email Automation**: When the app sends a `SEND_MAIL` instruction, this script uses Google's `MailApp` to send the link directly to the model's inbox.

@@ -221,9 +221,6 @@ export async function deleteModelFromPool(id: string, email?: string): Promise<{
   // Background DB delete
   try {
     if (id && isValidUuid(id)) {
-      try {
-        await supabase.from('assignments').update({ model_id: null }).eq('model_id', id);
-      } catch (_) {}
       await supabase.from('models').delete().eq('id', id);
     }
     if (targetEmail) {
