@@ -913,7 +913,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           sample_photo_url: finalPhotoUrl || "",
           samplePhotoBase64: (finalPhotoUrl && finalPhotoUrl.startsWith('data:image')) ? finalPhotoUrl : "",
           "BI": finalPhotoUrl || "",
-          "AY": finalPhotoUrl || "",
           ...(currentRound === '1' ? { "BI": finalPhotoUrl || "" } : {}),
           ...(currentRound === '2' ? { "BK": finalPhotoUrl || "" } : {}),
           ...(currentRound === '3' ? { "BM": finalPhotoUrl || "" } : {}),
@@ -1401,20 +1400,24 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             )}
           </CardHeader>
           <CardContent className="p-6">
-            {/* Hidden file inputs for Camera and Gallery */}
+            {/* Native file inputs for Camera and Gallery (sr-only ensures native OS mobile camera/gallery triggers) */}
             <input
+              id="admin-sample-camera-input"
               type="file"
               ref={cameraInputRef}
               accept="image/*"
               capture="environment"
-              className="hidden"
+              className="sr-only"
+              style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
               onChange={handleImageFileSelect}
             />
             <input
+              id="admin-sample-gallery-input"
               type="file"
               ref={galleryInputRef}
               accept="image/*"
-              className="hidden"
+              className="sr-only"
+              style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
               onChange={handleImageFileSelect}
             />
 
@@ -1507,29 +1510,27 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
                   Take a live photo of the sample garment or choose from your device. Photos are automatically compressed for high-speed loading.
                 </p>
-                <div className="flex flex-wrap items-center justify-center gap-3 mt-4" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="sm"
-                    className="h-9 px-4 text-xs font-semibold gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
-                    onClick={() => cameraInputRef.current?.click()}
-                    disabled={isCompressingSample}
+                <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
+                  <label
+                    htmlFor="admin-sample-camera-input"
+                    className="inline-flex items-center justify-center h-10 px-4 text-xs font-semibold gap-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer active:scale-95 transition-transform select-none"
+                    onClick={() => {
+                      try { cameraInputRef.current?.click(); } catch (_) {}
+                    }}
                   >
                     <Camera className="w-4 h-4" />
                     Take Photo (Camera)
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-9 px-4 text-xs font-semibold gap-2 bg-white border-slate-300 hover:bg-slate-50"
-                    onClick={() => galleryInputRef.current?.click()}
-                    disabled={isCompressingSample}
+                  </label>
+                  <label
+                    htmlFor="admin-sample-gallery-input"
+                    className="inline-flex items-center justify-center h-10 px-4 text-xs font-semibold gap-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs cursor-pointer active:scale-95 transition-transform select-none"
+                    onClick={() => {
+                      try { galleryInputRef.current?.click(); } catch (_) {}
+                    }}
                   >
                     <ImageIcon className="w-4 h-4 text-slate-600" />
                     Upload from Gallery / Files
-                  </Button>
+                  </label>
                 </div>
               </div>
             )}

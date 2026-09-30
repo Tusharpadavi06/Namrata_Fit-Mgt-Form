@@ -24,7 +24,7 @@ export function extractSheetId(input?: string): string {
 
 export function getActiveWebhookUrl(): string {
   try {
-    const saved = localStorage.getItem("custom_webhook_url");
+    const saved = localStorage.getItem("custom_webhook_url") || localStorage.getItem("custom_sheets_webhook_url");
     if (saved && saved.trim().startsWith("https://script.google.com/")) {
       return saved.trim();
     }
@@ -41,8 +41,10 @@ export function setActiveWebhookUrl(url: string) {
   try {
     if (url) {
       localStorage.setItem("custom_webhook_url", url.trim());
+      localStorage.setItem("custom_sheets_webhook_url", url.trim());
     } else {
       localStorage.removeItem("custom_webhook_url");
+      localStorage.removeItem("custom_sheets_webhook_url");
     }
   } catch (_) {}
 }
@@ -340,22 +342,26 @@ export async function syncFullSubmissionToGoogleSheets(
       samplePhotoUrl: submission.sample_photo_url || submission.sample_photo || "",
       sample_photo_url: submission.sample_photo_url || submission.sample_photo || "",
       samplePhotoBase64: (submission.sample_photo_url && submission.sample_photo_url.startsWith('data:image')) ? submission.sample_photo_url : "",
+      // Designer Sample Photo: ONLY Column BI for Round 1!
       "BI": submission.sample_photo_url || submission.sample_photo || "",
-      "AY": submission.sample_photo_url || submission.sample_photo || "",
-      "BJ": r1.fit_photo_url || (r1.fit_photos && r1.fit_photos[0]?.url) || "",
-      "AZ": r1.fit_photo_url || (r1.fit_photos && r1.fit_photos[0]?.url) || "",
-      "BK": submission.sample_photo_url || submission.sample_photo || "",
-      "BL": r2.fit_photo_url || (r2.fit_photos && r2.fit_photos[0]?.url) || "",
-      "BA": r2.fit_photo_url || (r2.fit_photos && r2.fit_photos[0]?.url) || "",
-      "BM": submission.sample_photo_url || submission.sample_photo || "",
-      "BN": r3.fit_photo_url || (r3.fit_photos && r3.fit_photos[0]?.url) || "",
-      "BB": r3.fit_photo_url || (r3.fit_photos && r3.fit_photos[0]?.url) || "",
-      "BO": submission.sample_photo_url || submission.sample_photo || "",
-      "BP": r4.fit_photo_url || (r4.fit_photos && r4.fit_photos[0]?.url) || "",
-      "BC": r4.fit_photo_url || (r4.fit_photos && r4.fit_photos[0]?.url) || "",
-      "BQ": submission.sample_photo_url || submission.sample_photo || "",
-      "BR": r5.fit_photo_url || (r5.fit_photos && r5.fit_photos[0]?.url) || "",
-      "BD": r5.fit_photo_url || (r5.fit_photos && r5.fit_photos[0]?.url) || "",
+      // Model Fit Photos per round (only for rounds that actually have attachments):
+      "BJ": r1.fit_photo_url || (r1.fit_photos && r1.fit_photos[0]?.url) || a.fit_photo_url || "",
+      ...(r2.fit_photo_url || (r2.fit_photos && r2.fit_photos[0]?.url) ? {
+        "BK": submission.sample_photo_url || submission.sample_photo || "",
+        "BL": r2.fit_photo_url || (r2.fit_photos && r2.fit_photos[0]?.url) || ""
+      } : {}),
+      ...(r3.fit_photo_url || (r3.fit_photos && r3.fit_photos[0]?.url) ? {
+        "BM": submission.sample_photo_url || submission.sample_photo || "",
+        "BN": r3.fit_photo_url || (r3.fit_photos && r3.fit_photos[0]?.url) || ""
+      } : {}),
+      ...(r4.fit_photo_url || (r4.fit_photos && r4.fit_photos[0]?.url) ? {
+        "BO": submission.sample_photo_url || submission.sample_photo || "",
+        "BP": r4.fit_photo_url || (r4.fit_photos && r4.fit_photos[0]?.url) || ""
+      } : {}),
+      ...(r5.fit_photo_url || (r5.fit_photos && r5.fit_photos[0]?.url) ? {
+        "BQ": submission.sample_photo_url || submission.sample_photo || "",
+        "BR": r5.fit_photo_url || (r5.fit_photos && r5.fit_photos[0]?.url) || ""
+      } : {}),
       link: currentLink,
       responseUrl: currentLink,
       tabName: submission.series || "General",

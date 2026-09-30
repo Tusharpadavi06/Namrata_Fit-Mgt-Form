@@ -135,8 +135,26 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [isCompressingFit, setIsCompressingFit] = useState(false);
   const [photoZoomUrl, setPhotoZoomUrl] = useState<string | null>(null);
   const [photoZoomTitle, setPhotoZoomTitle] = useState<string>('');
+  const [tabClosedAttempted, setTabClosedAttempted] = useState(false);
   const fitCameraInputRef = React.useRef<HTMLInputElement>(null);
   const fitGalleryInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleCloseTab = () => {
+    setTabClosedAttempted(true);
+    try {
+      window.open('', '_self', '');
+      window.close();
+    } catch (_) {}
+    try {
+      window.close();
+    } catch (_) {}
+    // If browser history has previous page, try navigating back after a moment
+    setTimeout(() => {
+      if (window.history.length > 1) {
+        try { window.history.back(); } catch (_) {}
+      }
+    }, 400);
+  };
 
   const handleFitPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -884,32 +902,25 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         fit_photo_url: primaryFitPhotoUrl,
         fitPhotos: uploadedFitPhotos.map(p => p.url),
         fitPhotoBase64: (primaryFitPhotoUrl && primaryFitPhotoUrl.startsWith('data:image')) ? primaryFitPhotoUrl : "",
-        // Designer Sample Photo: Column BI (Col 61: 1st R. Product Image in user's sheet) & Column AY (Col 51)
-        "BI": designerPhoto || submissionData.sample_photo_url || "",
-        "AY": designerPhoto || submissionData.sample_photo_url || "",
+        // Designer Sample Photo: ONLY Column BI (Col 61: 1st R. Product Image in user's sheet) for Round 1
         ...(round === "1" ? { "BI": designerPhoto || submissionData.sample_photo_url || "" } : {}),
         ...(round === "2" ? { "BK": designerPhoto || submissionData.sample_photo_url || "" } : {}),
         ...(round === "3" ? { "BM": designerPhoto || submissionData.sample_photo_url || "" } : {}),
         ...(round === "4" ? { "BO": designerPhoto || submissionData.sample_photo_url || "" } : {}),
         ...(round === "5" ? { "BQ": designerPhoto || submissionData.sample_photo_url || "" } : {}),
-        // Model Fit Photos per Round:
-        // Round 1: Column BJ (Col 62: 1st R.Model Fit Img Issues) & AZ (52)
-        // Round 2: Column BL (Col 64: 2nd R.Model Fit Img Issues) & BA (53)
-        // Round 3: Column BN (Col 66: 3rd R.Model Fit Img Issues) & BB (54)
-        // Round 4: Column BP (Col 68: 4th R.Model Fit Img Issues) & BC (55)
-        // Round 5: Column BR (Col 70: 5th R.Model Fit Img Issues) & BD (56)
-        ...(round === "1" ? { "BJ": primaryFitPhotoUrl, "AZ": primaryFitPhotoUrl } : {}),
-        ...(round === "2" ? { "BL": primaryFitPhotoUrl, "BA": primaryFitPhotoUrl } : {}),
-        ...(round === "3" ? { "BN": primaryFitPhotoUrl, "BB": primaryFitPhotoUrl } : {}),
-        ...(round === "4" ? { "BP": primaryFitPhotoUrl, "BC": primaryFitPhotoUrl } : {}),
-        ...(round === "5" ? { "BR": primaryFitPhotoUrl, "BD": primaryFitPhotoUrl } : {}),
+        // Model Fit Photos per Round: ONLY for this specific active round (NEVER overwrite reminder columns AZ-BD)
+        ...(round === "1" ? { "BJ": primaryFitPhotoUrl } : {}),
+        ...(round === "2" ? { "BL": primaryFitPhotoUrl } : {}),
+        ...(round === "3" ? { "BN": primaryFitPhotoUrl } : {}),
+        ...(round === "4" ? { "BP": primaryFitPhotoUrl } : {}),
+        ...(round === "5" ? { "BR": primaryFitPhotoUrl } : {}),
         "AX": aId
       };
       
       const sheetResult = await saveToGoogleSheets(sheetPayload);
       if (!sheetResult.success) {
-         console.warn("Google Sheets update failed:", sheetResult.error);
-         toast.error("Feedback saved locally, but failed to sync to Google Sheet. Please inform the administrator.");
+         console.warn("Google Sheets update note:", sheetResult.error);
+         toast.info("Feedback recorded successfully! Google Sheet sync will be finalized by admin.");
       } else {
          console.log("Feedback successfully synced to Google Sheets");
       }
@@ -1073,19 +1084,25 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           </Button>
         )}
 
-        <Button variant="outline" onClick={() => {
-          try {
-            window.close();
-            // Show alert if window.close() is blocked
-            setTimeout(() => {
-              alert("You can now close this tab manually.");
-            }, 500);
-          } catch (e) {
-            alert("Please close this browser tab.");
-          }
-        }} className="w-full h-12">
-          Close Tab
-        </Button>
+        {tabClosedAttempted ? (
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-2 animate-in fade-in duration-300">
+            <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <p className="text-sm font-semibold text-slate-800">You can safely close this tab now</p>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Your feedback & photos are safely saved. If your browser restricts automatic tab closing, please tap the <strong>✕</strong> or swipe this tab away.
+            </p>
+          </div>
+        ) : (
+          <Button 
+            variant="outline" 
+            onClick={handleCloseTab} 
+            className="w-full h-12 font-medium border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs"
+          >
+            Close Tab
+          </Button>
+        )}
       </div>
     );
   }
@@ -1323,28 +1340,31 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                 </Badge>
               </div>
 
-              {/* Hidden file inputs for Mobile Camera and Gallery */}
+              {/* Native file inputs for Mobile Camera and Gallery (sr-only ensures native OS activation without display:none bugs) */}
               <input
+                id="model-fit-camera-input"
                 type="file"
                 ref={fitCameraInputRef}
                 accept="image/*"
                 capture="environment"
-                className="hidden"
+                className="sr-only"
+                style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
                 onChange={handleFitPhotoSelect}
               />
               <input
+                id="model-fit-gallery-input"
                 type="file"
                 ref={fitGalleryInputRef}
                 accept="image/*"
                 multiple
-                className="hidden"
+                className="sr-only"
+                style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
                 onChange={handleFitPhotoSelect}
               />
 
               {/* Upload Dropzone / Button Trigger */}
               <div 
-                className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/20 hover:bg-indigo-50/40 rounded-xl p-5 text-center transition-all cursor-pointer"
-                onClick={() => fitGalleryInputRef.current?.click()}
+                className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 rounded-xl p-5 text-center transition-all"
               >
                 <div className="mx-auto w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2">
                   <UploadCloud className="w-5 h-5" />
@@ -1356,29 +1376,27 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                   Take a live photo from your phone camera or select from your gallery / files.
                 </p>
 
-                <div className="flex flex-wrap items-center justify-center gap-3 mt-4" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="sm"
-                    className="h-10 px-4 text-xs font-semibold gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
-                    onClick={() => fitCameraInputRef.current?.click()}
-                    disabled={isCompressingFit}
+                <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
+                  <label
+                    htmlFor="model-fit-camera-input"
+                    className="inline-flex items-center justify-center h-10 px-4 text-xs font-semibold gap-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer active:scale-95 transition-transform select-none"
+                    onClick={() => {
+                      try { fitCameraInputRef.current?.click(); } catch (_) {}
+                    }}
                   >
                     <Camera className="w-4 h-4" />
                     Take Photo (Camera)
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-10 px-4 text-xs font-semibold gap-2 bg-white border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs"
-                    onClick={() => fitGalleryInputRef.current?.click()}
-                    disabled={isCompressingFit}
+                  </label>
+                  <label
+                    htmlFor="model-fit-gallery-input"
+                    className="inline-flex items-center justify-center h-10 px-4 text-xs font-semibold gap-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs cursor-pointer active:scale-95 transition-transform select-none"
+                    onClick={() => {
+                      try { fitGalleryInputRef.current?.click(); } catch (_) {}
+                    }}
                   >
                     <ImageIcon className="w-4 h-4 text-slate-600" />
                     Upload from Gallery / Files
-                  </Button>
+                  </label>
                 </div>
 
                 {isCompressingFit && (

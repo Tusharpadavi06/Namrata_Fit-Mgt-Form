@@ -73,7 +73,7 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         .from('submissions')
         .select(`
           *,
-          assignments(id, model_name, model_email, color, size, round1, round2, round3, round4, round5)
+          assignments(id, model_name, model_email, color, size, round1, round2, round3, round4, round5, attachments, fit_photo_url, round1_attachments, round2_attachments, round3_attachments, round4_attachments, round5_attachments)
         `)
         .order('created_at', { ascending: false });
 
@@ -250,9 +250,17 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
   const handleSyncSingle = async (sub: Submission) => {
     setSyncingId(sub.id);
     try {
-      const res = await syncFullSubmissionToGoogleSheets(sub, '1', true);
+      // Determine highest active round in assignments
+      let activeRound = '1';
+      for (const a of (sub.assignments || [])) {
+        if (a.round5 && Object.keys(a.round5).length > 0) activeRound = '5';
+        else if (a.round4 && Object.keys(a.round4).length > 0 && parseInt(activeRound) < 4) activeRound = '4';
+        else if (a.round3 && Object.keys(a.round3).length > 0 && parseInt(activeRound) < 3) activeRound = '3';
+        else if (a.round2 && Object.keys(a.round2).length > 0 && parseInt(activeRound) < 2) activeRound = '2';
+      }
+      const res = await syncFullSubmissionToGoogleSheets(sub, activeRound, false);
       if (res.success) {
-        toast.success(`Style ${sub.style_number} (${res.syncedCount} assignments) synced to Google Sheet & emails triggered!`);
+        toast.success(`Style ${sub.style_number} (${res.syncedCount} assignments) synced to Google Sheet with photos!`);
       } else {
         if (res.errors.some(e => e.includes('401') || e.includes('Unauthorized') || e.includes('CORS'))) {
           toast.error("Google Sheets 401 Unauthorized: 'Who has access' must be 'Anyone'. Opening connection settings...");

@@ -1,36 +1,70 @@
 # Google Apps Script Code for Fit Comment System & Google Sheet Sync
 
-## 📌 Kyu Photo Google Sheet me Show nahi ho rahi thi? (Why photos were not showing in BI-BR)
-1. **Google Apps Script me purana code chal raha tha:** Purane script me columns BI, BJ, BK, BL, BM, BN, BO, BP, BQ, BR ka photo code nahi tha.
-2. **Google Sheets 50,000 character limit:** Photo ka base64 data 50,000 characters se bada hota hai. Google Sheets direct base64 image cell me allow nahi karta.
-3. **Updated Solution:** Ab updated script photo ko automatic Google Drive ke `Style_Fit_Photos` folder me save karta hai aur Google Sheet me `=HYPERLINK(..., IMAGE(...))` formula insert karta hai, jisse:
-   - **Col BI (61)**: 1st R. Product Image (Designer Photo)
-   - **Col BJ (62)**: 1st R.Model Fit Img Issues (Model Fit Photo)
-   - **Col BK (63) / BL (64)**: Round 2 Photos
-   - **Col BM (65) / BN (66)**: Round 3 Photos
-   - **Col BO (67) / BP (68)**: Round 4 Photos
-   - **Col BQ (69) / BR (70)**: Round 5 Photos
-   dono photos Google Sheet me thumbnail ke roop me show hongi aur click karne par full resolution me open hongi!
+## 📌 Aapke Sawaalon ka Complete Solution (Exact Issue Analysis & Resolution)
+
+### ❓ "AY me sample attachment q aa rhi he or model ka round 1 ka sample az me q aa rha he .? BI SAMPLE HE NA desginer ke liye ( 1st R. Product Image(BI), 1st R.Model Fit Img Issues(BJ), 2nd R. Product Image(BK), 2nd R.Model Fit Img Issues(BL), 3rd R. Product Image(BM), 3rd R.Model Fit Img Issues(BN), 4th R. Product Image(BO), 4th R.Model Fit Img Issues(BP), 5th R. Product Image(BQ), 5th R.Model Fit Img Issues(BR) .BI -BR columns he na ? wahi per attachment ke phots aaye."
+
+#### 🔍 Wajah (Root Cause):
+1. **Sample Attachment AY me kyu aa raha tha?**
+   - Web App ke `FormTab.tsx` payload me galti se `"AY": finalPhotoUrl` likha hua tha, aur purane Apps Script me AY column ka header "Sample Garment Photo" tha. Jab bhi naya style create ya submit hota tha, photo direct AY column me push ho rahi thi.
+2. **Model ka Round 1 Fit Photo AZ me kyu aa raha tha?**
+   - Google Sheet me jo Google Apps Script deployed tha, us purane script me Round 1 fit photo ko **Column AZ** (Col 52) me update karne ka code tha (aur R2 ko BA, R3 ko BB, R4 ko BC, R5 ko BD me).
+   - Lekin aapke actual Google Sheet me:
+     - **Column AZ** = **"Reminder Mail Status Reminder 1st"** (Reminder status column hai, photo column nahi!)
+     - **Column BA - BD** = **"Reminder 2nd"** to **"Reminder 5th"**!
+     - **Column AY** = Blank column hai!
+   - Is wajah se Model ki photos reminder column AZ me aa rahi thi aur Designer ki photo AY me aa rahi thi!
 
 ---
 
-## 🚀 1-Minute Setup Guide (Kaise deploy karein)
+### ✅ Solution & Exact Fix (Ab Kya Hua Hai):
 
-1. Open your Google Sheet: `https://docs.google.com/spreadsheets/d/1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4/edit`
+1. **`FormTab.tsx` se AY mapping permanently remove kar di gayi hai**:
+   - Ab `"AY"` me koi bhi data ya photo nahi bheja jaata.
+2. **Photos strictly aur exclusively Columns BI se BR me aayengi**:
+   - **Column BI (Col 61)**: `1st R. Product Image` (Round 1 Designer Sample Garment Image)
+   - **Column BJ (Col 62)**: `1st R.Model Fit Img Issues` (Round 1 Model Fit Issues Photo)
+   - **Column BK (Col 63)**: `2nd R. Product Image` (Round 2 Designer Sample Garment Image)
+   - **Column BL (Col 64)**: `2nd R.Model Fit Img Issues` (Round 2 Model Fit Issues Photo)
+   - **Column BM (Col 65)**: `3rd R. Product Image` (Round 3 Designer Sample Garment Image)
+   - **Column BN (Col 66)**: `3rd R.Model Fit Img Issues` (Round 3 Model Fit Issues Photo)
+   - **Column BO (Col 67)**: `4th R. Product Image` (Round 4 Designer Sample Garment Image)
+   - **Column BP (Col 68)**: `4th R.Model Fit Img Issues` (Round 4 Model Fit Issues Photo)
+   - **Column BQ (Col 69)**: `5th R. Product Image` (Round 5 Designer Sample Garment Image)
+   - **Column BR (Col 70)**: `5th R.Model Fit Img Issues` (Round 5 Model Fit Issues Photo)
+3. **Columns AY, AZ, BA, BB, BC, BD, BH me koi photo kabhi nahi aayegi**:
+   - AZ se BD aapke **Reminder Mail Status** ke liye preserve rahenge.
+4. **Purani Galti Se AY / AZ / BH me gayi photos ko 1-Click me Fix karne ka tool add kiya gaya hai**:
+   - Apps Script me ek naya function **`fixAndCleanAllPhotoColumns`** add kiya gaya hai.
+   - Toolbar dropdown me **`fixAndCleanAllPhotoColumns`** select karke **Run** dabane par saari existing rows me jo photos AY, AZ ya BH me padi hain, wo turant BI aur BJ me move ho jayengi aur AY/AZ/BH clean ho jayenge!
+
+---
+
+## 🚀 2-Minute Google Apps Script Update Guide (Do This Once in Google Sheet)
+
+1. Apna Google Sheet open karein:
+   `https://docs.google.com/spreadsheets/d/1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4/edit`
 2. Top menu me **Extensions** > **Apps Script** par click karein.
-3. `Code.gs` ke andar jo bhi purana code hai usko poora select karke **Delete** karein.
+3. `Code.gs` ka saara purana code select karke **Delete** karein.
 4. Niche diya gaya complete code copy karke paste karein.
-5. Save icon (floppy disk) par click karein.
-6. Blue **Deploy** button > **Manage Deployments** par click karein.
-7. Active deployment ke samne **Pencil (Edit)** icon par click karein.
-8. **Version** me **"New version"** select karein (Yeh sabse important hai!).
-9. **Who has access** me **"Anyone"** select karein.
-10. **Deploy** par click karein (agar Google permission maange to Allow karein).
-11. Web App URL ko copy karein aur application ke **Google Sheets & Mail Settings** me check karein!
+5. Save icon (floppy disk / Ctrl+S) dabayein.
+6. **Authorization Step (Mandatory):**
+   - Toolbar ke function dropdown me **"testAndAuthorizeDrive"** select karein aur **"Run"** par click karein.
+   - Google prompt aane par: **Review permissions** > Select Google Account > **Advanced** > **Go to Fit Comment System (unsafe)** > **Allow**.
+7. **Clean Purani Rows (Optional):**
+   - Toolbar me **"fixAndCleanAllPhotoColumns"** select karke **"Run"** dabayein — agar purani rows me AY/AZ me photo thi, wo turant BI/BJ me move ho jayegi!
+8. **Deployment Step (Mandatory):**
+   - Blue **Deploy** button > **Manage Deployments** par click karein.
+   - Pencil (Edit) icon dabayein.
+   - Version me **"New version"** select karein.
+   - Who has access me **"Anyone"** select karein.
+   - **Deploy** par click karein.
+9. Web App URL ko app ke **Google Sheets Settings** me update karein.
+10. **Fit History** tab me kisi bhi style ke samne **"Sync Sheet"** dabayein — Sheet ke Column **BI** aur **BJ** me photos automatically show ho jayengi!
 
 ---
 
-## 📋 The Complete Google Apps Script Code (Copy this entirely into Code.gs):
+## 📋 The Complete Google Apps Script Code:
 
 ```javascript
 // ==============================================================================
@@ -38,15 +72,134 @@
 // ==============================================================================
 // Instructions:
 // 1. In your Google Sheet, click Extensions > Apps Script.
-// 2. Select all code in Code.gs, delete it, and paste this entire file.
+// 2. Select all code in Code.gs, delete it, and paste this entire code.
 // 3. Click the Save icon (floppy disk).
-// 4. Click 'Deploy' > 'Manage Deployments' (or 'New deployment' if first time).
-// 5. Click the Pencil (Edit) icon:
-//    - Execute as: Me (your Google account)
-//    - Who has access: Anyone  <--- CRITICAL! Must be 'Anyone'
-//    - Version: 'New version'  <--- CRITICAL! Always select New version when updating
-// 6. Click 'Deploy'. If prompted, Authorize access.
+// 4. In the toolbar function dropdown, select "testAndAuthorizeDrive" and click "Run".
+//    Google will prompt to Authorize -> Click Review permissions -> Select account -> Allow.
+//    (This grants Drive permission so photos are saved to Drive & displayed in Google Sheets!)
+// 5. Click "Deploy" > "Manage Deployments":
+//    - Click the Pencil (Edit) icon next to active deployment
+//    - Version: "New version"  <--- CRITICAL! Always select New version when updating
+//    - Who has access: "Anyone" <--- CRITICAL! Must be "Anyone"
+// 6. Click "Deploy". Done!
 // ==============================================================================
+
+/**
+ * ⚡ ONE-CLICK AUTHORIZATION & DIAGNOSTIC FUNCTION
+ * Run this function ONCE in the Apps Script Editor toolbar (Select "testAndAuthorizeDrive" and click "Run").
+ * Google will prompt: "Review permissions" -> Choose your Google Account -> "Allow".
+ * This permanently grants DriveApp permissions to save and display style photos in Google Sheets!
+ */
+function testAndAuthorizeDrive() {
+  try {
+    var folderName = "Style_Fit_Photos";
+    var folders = DriveApp.getFoldersByName(folderName);
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+    Logger.log("✅ Google Drive access authorized! Folder: " + folder.getName() + " (ID: " + folder.getId() + ")");
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    Logger.log("✅ Google Sheet access authorized! Sheet: " + ss.getName());
+    
+    return "SUCCESS: All Drive & Spreadsheet permissions are fully authorized! Photos will now display in Google Sheet.";
+  } catch (err) {
+    Logger.log("❌ Authorization Error: " + err.toString());
+    throw err;
+  }
+}
+
+/**
+ * ⚡ ONE-CLICK REPAIR & CLEANUP UTILITY:
+ * Run this function in the Apps Script toolbar ("fixAndCleanAllPhotoColumns" -> "Run") to immediately:
+ * 1. Move any misplaced photos from AY, AZ, or BH directly into correct columns BI (1st R. Product Image) & BJ (1st R.Model Fit Img Issues)!
+ * 2. Clear AY and BH, and restore AZ for "Reminder Mail Status"!
+ * 3. Set row height to 80px and photo column widths to 100px so photos display cleanly!
+ */
+function fixAndCleanAllPhotoColumns() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  var totalCleaned = 0;
+  
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) continue;
+    
+    if (sheet.getMaxColumns() < 75) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 75 - sheet.getMaxColumns());
+    }
+    
+    for (var r = 2; r <= lastRow; r++) {
+      // 1. Check AY (Col 51)
+      var ayCell = sheet.getRange(r, colLetterToIndex("AY"));
+      var ayVal = String(ayCell.getValue() || "");
+      if (ayVal && (ayVal.indexOf("=IMAGE") > -1 || ayVal.indexOf("http") === 0)) {
+        var biCell = sheet.getRange(r, colLetterToIndex("BI"));
+        if (!biCell.getValue()) {
+          var pAy = formatPhotoFormulaHelper(ayVal, "Sample_Ref");
+          if (pAy && pAy.formula) updateCell(sheet, r, "BI", pAy.formula);
+        }
+        ayCell.clearContent();
+        totalCleaned++;
+      }
+      
+      // 2. Check AZ (Col 52 - Reminder 1st)
+      var azCell = sheet.getRange(r, colLetterToIndex("AZ"));
+      var azVal = String(azCell.getValue() || "");
+      if (azVal && (azVal.indexOf("=IMAGE") > -1 || (azVal.indexOf("http") === 0 && (azVal.indexOf("drive.google") > -1 || azVal.indexOf(".jpg") > -1 || azVal.indexOf(".png") > -1)))) {
+        var bjCell = sheet.getRange(r, colLetterToIndex("BJ"));
+        if (!bjCell.getValue()) {
+          var pAz = formatPhotoFormulaHelper(azVal, "Fit_R1");
+          if (pAz && pAz.formula) updateCell(sheet, r, "BJ", pAz.formula);
+        }
+        azCell.clearContent();
+        totalCleaned++;
+      }
+      
+      // 3. Check BH (Col 60)
+      var bhCell = sheet.getRange(r, colLetterToIndex("BH"));
+      var bhVal = String(bhCell.getValue() || "");
+      if (bhVal && (bhVal.indexOf("=IMAGE") > -1 || bhVal.indexOf("http") === 0)) {
+        var biCell2 = sheet.getRange(r, colLetterToIndex("BI"));
+        if (!biCell2.getValue()) {
+          var pBh = formatPhotoFormulaHelper(bhVal, "Sample_Ref");
+          if (pBh && pBh.formula) updateCell(sheet, r, "BI", pBh.formula);
+        }
+        bhCell.clearContent();
+        totalCleaned++;
+      }
+      
+      sheet.setRowHeight(r, 80);
+    }
+    setPhotoColumnWidths(sheet);
+  }
+  
+  Logger.log("✅ Successfully cleaned and migrated " + totalCleaned + " photo cells to BI and BJ!");
+  return "SUCCESS: Migrated all misplaced photos to BI/BJ and restored AY, AZ, BH!";
+}
+
+function formatPhotoFormulaHelper(photoStr, filePrefix) {
+  if (!photoStr) return null;
+  photoStr = String(photoStr).trim();
+  if (photoStr.indexOf("=") === 0) return { formula: photoStr };
+  if (photoStr.indexOf("http") === 0) {
+    var match = photoStr.match(/https?:\/\/[^\s"\)]+/);
+    var cleanUrl = match ? match[0] : photoStr;
+    var directUrl = cleanUrl;
+    var viewUrl = cleanUrl;
+    var driveMatch = cleanUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || cleanUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/) || cleanUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (driveMatch && driveMatch[1]) {
+      var fId = driveMatch[1];
+      directUrl = "https://lh3.googleusercontent.com/d/" + fId;
+      viewUrl = "https://drive.google.com/file/d/" + fId + "/view";
+    }
+    return {
+      formula: '=HYPERLINK("' + viewUrl + '", IMAGE("' + directUrl + '", 1))',
+      directUrl: directUrl,
+      viewUrl: viewUrl
+    };
+  }
+  return null;
+}
 
 function doGet(e) {
   return ContentService.createTextOutput("Fit Comment Google Apps Script Web App is active and ready.")
@@ -59,7 +212,7 @@ function doPost(e) {
     // 1. Lock for 30 seconds to prevent race conditions during concurrent submissions
     lock.waitLock(30000);
     
-    // Safety check for manual 'Run' button clicks inside Apps Script Editor
+    // Safety check for manual "Run" button clicks inside Apps Script Editor
     if (!e || !e.postData || !e.postData.contents) {
       return ContentService.createTextOutput("Web App is ready. Please test by submitting data from the application.")
         .setMimeType(ContentService.MimeType.TEXT);
@@ -80,20 +233,20 @@ function doPost(e) {
     }
     
     // 3. Handle connection health check ping
-    if (data.type === 'PING_TEST') {
+    if (data.type === "PING_TEST") {
       return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
     }
 
     // 4. Handle explicit EMAIL trigger
-    if (data.type === 'SEND_MAIL') {
+    if (data.type === "SEND_MAIL") {
       return sendMail(data);
     }
 
     // 4b. Handle explicit IMAGE UPLOAD to Google Drive
-    if (data.type === 'UPLOAD_IMAGE') {
+    if (data.type === "UPLOAD_IMAGE") {
       var filePrefix = data.prefix || data.styleNo || "photo";
       var saved = saveImageToDrive(data.base64, filePrefix + "_" + Date.now() + ".jpg");
-      if (saved) {
+      if (saved && saved.fileId) {
         return ContentService.createTextOutput(JSON.stringify({
           success: true,
           url: saved.directUrl,
@@ -104,7 +257,7 @@ function doPost(e) {
       } else {
         return ContentService.createTextOutput(JSON.stringify({
           success: false,
-          error: "Failed to save image to Google Drive"
+          error: (saved && saved.error) || "Failed to save image to Google Drive"
         })).setMimeType(ContentService.MimeType.JSON);
       }
     }
@@ -132,7 +285,7 @@ function doPost(e) {
       
       // Save ID marker in Column AX (Column index 50) and Timestamp in A
       updateCell(sheet, row, "AX", assignmentId);
-      updateCell(sheet, row, "A", data.timestamp || new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
+      updateCell(sheet, row, "A", data.timestamp || new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
     }
     
     // 7. Update Base Assignment Fields (Columns B-F)
@@ -197,29 +350,45 @@ function doPost(e) {
     }
 
     // 9. Handle Photos & Attachments (Google Drive upload + Sheet IMAGE() preview)
-    var samplePhoto = data.samplePhoto || data.samplePhotoUrl || data.sample_photo_url || data.BI || data.AY;
+    // NOTE: Photos ONLY map to BI - BR columns. Never map to AY, AZ, or BH.
+    var samplePhoto = data.samplePhoto || data.samplePhotoUrl || data.sample_photo_url || data.BI;
     var fitPhoto = data.fitPhoto || data.fitPhotoUrl || data.fit_photo_url || data.fitPhotoBase64;
 
-    // Helper: Formats photo data into Google Drive file and Sheet Formula
+    // Cache to prevent duplicate Drive uploads for same photo within one submission
+    var photoFormulaCache = {};
+
     function formatPhotoFormula(photoData, filePrefix) {
       if (!photoData) return null;
       var photoStr = String(photoData).trim();
       if (!photoStr) return null;
 
       // If it is already a complete formula, return as is
-      if (photoStr.indexOf('=') === 0) {
+      if (photoStr.indexOf("=") === 0) {
         return { formula: photoStr, zoomUrl: "", directUrl: "" };
       }
 
+      var cacheKey = photoStr.length > 200 ? photoStr.slice(0, 100) + "_" + photoStr.length : photoStr;
+      if (photoFormulaCache[cacheKey]) {
+        return photoFormulaCache[cacheKey];
+      }
+
       // If base64 dataUrl: Save to Google Drive Style_Fit_Photos folder
-      if (photoStr.indexOf('data:image') === 0 || (photoStr.length > 500 && photoStr.indexOf('http') === -1)) {
+      if (photoStr.indexOf("data:image") === 0 || (photoStr.length > 500 && photoStr.indexOf("http") === -1)) {
         try {
           var saved = saveImageToDrive(photoStr, filePrefix + "_" + Date.now() + ".jpg");
           if (saved && saved.fileId) {
-            return {
+            var resObj = {
               formula: '=HYPERLINK("' + saved.viewUrl + '", IMAGE("' + saved.directUrl + '", 1))',
               zoomUrl: saved.viewUrl,
               directUrl: saved.directUrl
+            };
+            photoFormulaCache[cacheKey] = resObj;
+            return resObj;
+          } else if (saved && saved.needsAuth) {
+            return {
+              formula: '⚠️ Authorize Drive in Apps Script (Click Run on testAndAuthorizeDrive)',
+              zoomUrl: "",
+              directUrl: ""
             };
           }
         } catch (dErr) {
@@ -229,94 +398,131 @@ function doPost(e) {
       }
 
       // If HTTP URL: use directly with formula
-      if (photoStr.indexOf('http') === 0) {
+      if (photoStr.indexOf("http") === 0) {
         var match = photoStr.match(/https?:\/\/[^\s"\)]+/);
         var cleanUrl = match ? match[0] : photoStr;
         var directUrl = cleanUrl;
         var viewUrl = cleanUrl;
         
-        // If Google Drive URL, use thumbnail endpoint for reliable =IMAGE() rendering in Sheets
-        var driveMatch = cleanUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || cleanUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        // If Google Drive URL, use lh3 endpoint for direct 200 OK rendering in Google Sheets
+        var driveMatch = cleanUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || cleanUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/) || cleanUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
         if (driveMatch && driveMatch[1]) {
           var fId = driveMatch[1];
-          directUrl = "https://drive.google.com/thumbnail?id=" + fId + "&sz=w500";
+          directUrl = "https://lh3.googleusercontent.com/d/" + fId;
           viewUrl = "https://drive.google.com/file/d/" + fId + "/view";
         }
 
-        return {
+        var httpRes = {
           formula: '=HYPERLINK("' + viewUrl + '", IMAGE("' + directUrl + '", 1))',
           zoomUrl: viewUrl,
           directUrl: directUrl
         };
+        photoFormulaCache[cacheKey] = httpRes;
+        return httpRes;
       }
 
       return null;
     }
 
-    // Save Designer Sample Photo to Column BI (Col 61: 1st R. Product Image) and Column AY (Col 51)
+    // Save Designer Sample Photo:
+    // Round 1 -> Column BI (Col 61: 1st R. Product Image in user's sheet)
+    // Round 2 -> Column BK (Col 63: 2nd R. Product Image)
+    // Round 3 -> Column BM (Col 65: 3rd R. Product Image)
+    // Round 4 -> Column BO (Col 67: 4th R. Product Image)
+    // Round 5 -> Column BQ (Col 69: 5th R. Product Image)
     if (samplePhoto) {
       var sampleResult = formatPhotoFormula(samplePhoto, (data.styleNo || "Sample") + "_Ref");
       if (sampleResult && sampleResult.formula) {
-        updateCell(sheet, row, "BI", sampleResult.formula);
-        updateCell(sheet, row, "AY", sampleResult.formula);
-        updateCell(sheet, row, "BH", sampleResult.zoomUrl || sampleResult.directUrl);
         if (round === "1") updateCell(sheet, row, "BI", sampleResult.formula);
         else if (round === "2") updateCell(sheet, row, "BK", sampleResult.formula);
         else if (round === "3") updateCell(sheet, row, "BM", sampleResult.formula);
         else if (round === "4") updateCell(sheet, row, "BO", sampleResult.formula);
         else if (round === "5") updateCell(sheet, row, "BQ", sampleResult.formula);
+        else updateCell(sheet, row, "BI", sampleResult.formula);
 
         sheet.setRowHeight(row, 80);
-        // Supply public URL so sendMail can embed it in email
+        setPhotoColumnWidths(sheet);
         if (sampleResult.directUrl) {
           data.samplePhotoUrl = sampleResult.directUrl;
         }
       }
     }
 
-    // Save Model Fit Photo to Round Columns:
-    // User Sheet Column Headers:
-    // Round 1 -> BJ (Col 62: 1st R.Model Fit Img Issues) & AZ (Col 52)
-    // Round 2 -> BL (Col 64: 2nd R.Model Fit Img Issues) & BA (Col 53)
-    // Round 3 -> BN (Col 66: 3rd R.Model Fit Img Issues) & BB (Col 54)
-    // Round 4 -> BP (Col 68: 4th R.Model Fit Img Issues) & BC (Col 55)
-    // Round 5 -> BR (Col 70: 5th R.Model Fit Img Issues) & BD (Col 56)
+    // Save Model Fit Photo to Round Columns ONLY:
+    // Round 1 -> Column BJ (Col 62: 1st R.Model Fit Img Issues)
+    // Round 2 -> Column BL (Col 64: 2nd R.Model Fit Img Issues)
+    // Round 3 -> Column BN (Col 66: 3rd R.Model Fit Img Issues)
+    // Round 4 -> Column BP (Col 68: 4th R.Model Fit Img Issues)
+    // Round 5 -> Column BR (Col 70: 5th R.Model Fit Img Issues)
     if (fitPhoto) {
       var fitResult = formatPhotoFormula(fitPhoto, (data.styleNo || "Fit") + "_R" + round);
       if (fitResult && fitResult.formula) {
         if (round === "1") {
           updateCell(sheet, row, "BJ", fitResult.formula);
-          updateCell(sheet, row, "AZ", fitResult.formula);
         } else if (round === "2") {
           updateCell(sheet, row, "BL", fitResult.formula);
-          updateCell(sheet, row, "BA", fitResult.formula);
         } else if (round === "3") {
           updateCell(sheet, row, "BN", fitResult.formula);
-          updateCell(sheet, row, "BB", fitResult.formula);
         } else if (round === "4") {
           updateCell(sheet, row, "BP", fitResult.formula);
-          updateCell(sheet, row, "BC", fitResult.formula);
         } else if (round === "5") {
           updateCell(sheet, row, "BR", fitResult.formula);
-          updateCell(sheet, row, "BD", fitResult.formula);
         }
         sheet.setRowHeight(row, 80);
+        setPhotoColumnWidths(sheet);
       }
     }
 
-    // 10. Direct Column Mapping fallback
-    var directCols = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AO","AP","AQ","AR","AS","AT","AX","AY","AZ","BA","BB","BC","BD","BH","BI","BJ","BK","BL","BM","BN","BO","BP","BQ","BR"];
+    // Automatic migration & cleanup of legacy misplaced columns (AY, AZ, BH)
+    try {
+      var ayCell = sheet.getRange(row, colLetterToIndex("AY"));
+      var ayVal = String(ayCell.getValue() || "");
+      if (ayVal && (ayVal.indexOf("=IMAGE") > -1 || ayVal.indexOf("http") === 0)) {
+        var biCell = sheet.getRange(row, colLetterToIndex("BI"));
+        if (!biCell.getValue()) {
+          var pAy = formatPhotoFormula(ayVal, (data.styleNo || "Sample") + "_Ref");
+          if (pAy && pAy.formula) updateCell(sheet, row, "BI", pAy.formula);
+        }
+        ayCell.clearContent();
+      }
+
+      var azCell = sheet.getRange(row, colLetterToIndex("AZ"));
+      var azVal = String(azCell.getValue() || "");
+      if (azVal && (azVal.indexOf("=IMAGE") > -1 || (azVal.indexOf("http") === 0 && (azVal.indexOf("drive.google") > -1 || azVal.indexOf(".jpg") > -1 || azVal.indexOf(".png") > -1)))) {
+        var bjCell = sheet.getRange(row, colLetterToIndex("BJ"));
+        if (!bjCell.getValue()) {
+          var pAz = formatPhotoFormula(azVal, (data.styleNo || "Fit") + "_R1");
+          if (pAz && pAz.formula) updateCell(sheet, row, "BJ", pAz.formula);
+        }
+        azCell.clearContent();
+      }
+
+      var bhCell = sheet.getRange(row, colLetterToIndex("BH"));
+      var bhVal = String(bhCell.getValue() || "");
+      if (bhVal && (bhVal.indexOf("=IMAGE") > -1 || bhVal.indexOf("http") === 0)) {
+        var biCell2 = sheet.getRange(row, colLetterToIndex("BI"));
+        if (!biCell2.getValue()) {
+          var pBh = formatPhotoFormula(bhVal, (data.styleNo || "Sample") + "_Ref");
+          if (pBh && pBh.formula) updateCell(sheet, row, "BI", pBh.formula);
+        }
+        bhCell.clearContent();
+      }
+    } catch (_) {}
+
+    // 10. Direct Column Mapping fallback (Only update photo formulas for photo columns BI-BR)
+    var directCols = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AO","AP","AQ","AR","AS","AT","AX","BI","BJ","BK","BL","BM","BN","BO","BP","BQ","BR"];
     for (var c = 0; c < directCols.length; c++) {
       var colKey = directCols[c];
       if (data[colKey] !== undefined && data[colKey] !== null && data[colKey] !== "") {
         var val = data[colKey];
-        var isPhotoCol = (colKey === "AY" || colKey === "AZ" || colKey === "BA" || colKey === "BB" || colKey === "BC" || colKey === "BD" || colKey === "BI" || colKey === "BJ" || colKey === "BK" || colKey === "BL" || colKey === "BM" || colKey === "BN" || colKey === "BO" || colKey === "BP" || colKey === "BQ" || colKey === "BR");
+        var isPhotoCol = (colKey === "BI" || colKey === "BJ" || colKey === "BK" || colKey === "BL" || colKey === "BM" || colKey === "BN" || colKey === "BO" || colKey === "BP" || colKey === "BQ" || colKey === "BR");
         if (isPhotoCol) {
           var pRes = formatPhotoFormula(val, (data.styleNo || "Photo") + "_" + colKey);
           if (pRes && pRes.formula) {
             updateCell(sheet, row, colKey, pRes.formula);
             sheet.setRowHeight(row, 80);
           }
+          // Do not write raw base64 string to prevent Google Sheets 50,000 char error
         } else {
           updateCell(sheet, row, colKey, val);
         }
@@ -335,6 +541,20 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function setPhotoColumnWidths(sheet) {
+  try {
+    var photoCols = ["BI", "BJ", "BK", "BL", "BM", "BN", "BO", "BP", "BQ", "BR"];
+    for (var i = 0; i < photoCols.length; i++) {
+      var colIdx = colLetterToIndex(photoCols[i]);
+      if (sheet.getMaxColumns() >= colIdx) {
+        if (sheet.getColumnWidth(colIdx) < 95) {
+          sheet.setColumnWidth(colIdx, 100);
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 function getSheetWithHeaders(ss, sheetName) {
@@ -356,24 +576,23 @@ function getSheetWithHeaders(ss, sheetName) {
       "R5 Color", "R5 Fit Date", "R5 Received", "R5 Comments Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback",
       "", "", "", "", // AU(47), AV(48), AW(49)
       "Record ID", // AX (50)
-      "Sample Garment Photo", // AY (51)
-      "Reminder 1st", // AZ (52)
+      "", // AY (51) - Blank
+      "Reminder Mail Status Reminder 1st", // AZ (52) - Reminder 1st
       "Reminder 2nd", // BA (53)
       "Reminder 3rd", // BB (54)
       "Reminder 4th", // BC (55)
       "Reminder 5th", // BD (56)
-      "", "", "", // BE(57), BF(58), BG(59)
-      "Sample Photo Zoom", // BH (60)
-      "1st R. Product Image", // BI (61)
-      "1st R.Model Fit Img Issues", // BJ (62)
-      "2nd R. Product Image", // BK (63)
-      "2nd R.Model Fit Img Issues", // BL (64)
-      "3rd R. Product Image", // BM (65)
-      "3rd R.Model Fit Img Issues", // BN (66)
-      "4th R. Product Image", // BO (67)
-      "4th R.Model Fit Img Issues", // BP (68)
-      "5th R. Product Image", // BQ (69)
-      "5th R.Model Fit Img Issues"  // BR (70)
+      "", "", "", "", // BE(57), BF(58), BG(59), BH(60) - Blank
+      "1st R. Product Image", // BI (61) - Designer Sample Photo R1
+      "1st R.Model Fit Img Issues", // BJ (62) - Model Fit Issues Photo R1
+      "2nd R. Product Image", // BK (63) - Designer Sample Photo R2
+      "2nd R.Model Fit Img Issues", // BL (64) - Model Fit Issues Photo R2
+      "3rd R. Product Image", // BM (65) - Designer Sample Photo R3
+      "3rd R.Model Fit Img Issues", // BN (66) - Model Fit Issues Photo R3
+      "4th R. Product Image", // BO (67) - Designer Sample Photo R4
+      "4th R.Model Fit Img Issues", // BP (68) - Model Fit Issues Photo R4
+      "5th R. Product Image", // BQ (69) - Designer Sample Photo R5
+      "5th R.Model Fit Img Issues"  // BR (70) - Model Fit Issues Photo R5
     ];
     sheet.appendRow(headers);
     sheet.setFrozenRows(1);
@@ -418,12 +637,23 @@ function updateCell(sheet, row, colName, value) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), colIndex - sheet.getMaxColumns() + 5);
     }
     var range = sheet.getRange(row, colIndex);
-    var strVal = String(value);
-    if (strVal.charAt(0) === '=') {
+    var strVal = String(value).trim();
+    if (strVal.charAt(0) === "=") {
       try {
         range.setFormula(strVal);
       } catch (fErr) {
-        range.setValue(strVal);
+        Logger.log("Formula error on " + colName + row + ": " + fErr.toString());
+        try {
+          var semiFormula = strVal.replace(/,\s*(IMAGE|1)/g, "; $1");
+          range.setFormula(semiFormula);
+        } catch (_) {
+          var urlMatch = strVal.match(/https?:\/\/[^\s"\)]+/);
+          if (urlMatch) {
+            range.setValue(urlMatch[0]);
+          } else {
+            range.setValue(strVal);
+          }
+        }
       }
     } else {
       if (strVal.length > 49000) {
@@ -441,10 +671,10 @@ function saveImageToDrive(base64Data, fileName) {
     var cleanBase64 = String(base64Data).trim();
     
     // Check if it has data URL prefix like data:image/png;base64,...
-    var commaIdx = cleanBase64.indexOf(',');
-    if (cleanBase64.indexOf('data:') === 0 && commaIdx > -1) {
+    var commaIdx = cleanBase64.indexOf(",");
+    if (cleanBase64.indexOf("data:") === 0 && commaIdx > -1) {
       var header = cleanBase64.substring(5, commaIdx);
-      var semiIdx = header.indexOf(';');
+      var semiIdx = header.indexOf(";");
       if (semiIdx > -1) {
         contentType = header.substring(0, semiIdx).trim() || "image/jpeg";
       }
@@ -452,11 +682,11 @@ function saveImageToDrive(base64Data, fileName) {
     }
     
     // Strip all whitespaces, newlines, and carriage returns that break base64 decoding
-    cleanBase64 = cleanBase64.replace(/\s+/g, '');
+    cleanBase64 = cleanBase64.replace(/\s+/g, "");
     // Convert URL-safe base64 characters (- and _) to standard (+ and /)
-    cleanBase64 = cleanBase64.replace(/-/g, '+').replace(/_/g, '/');
+    cleanBase64 = cleanBase64.replace(/-/g, "+").replace(/_/g, "/");
     while (cleanBase64.length % 4 !== 0) {
-      cleanBase64 += '=';
+      cleanBase64 += "=";
     }
     
     var decoded = Utilities.base64Decode(cleanBase64);
@@ -480,14 +710,16 @@ function saveImageToDrive(base64Data, fileName) {
     }
 
     var fileId = file.getId();
-    // Use official Drive thumbnail endpoint for reliable =IMAGE() rendering in Google Sheets
-    var directUrl = "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w500";
+    // Use official direct Google CDN endpoint for instant 200 OK =IMAGE() rendering in Google Sheets
+    var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
     var viewUrl = "https://drive.google.com/file/d/" + fileId + "/view";
 
     return { directUrl: directUrl, viewUrl: viewUrl, fileId: fileId };
   } catch (err) {
     Logger.log("saveImageToDrive error: " + err.toString());
-    return null;
+    var errMsg = err.toString();
+    var isAuth = errMsg.indexOf("permission") > -1 || errMsg.indexOf("not allowed") > -1;
+    return { error: errMsg, needsAuth: isAuth };
   }
 }
 
@@ -503,7 +735,7 @@ function sendMail(data) {
   var subject = "Action Required: Fit Comments for Style " + styleName + " (Round " + round + ")";
   
   var photoHtml = "";
-  var photoUrl = data.samplePhotoUrl || data.samplePhoto || data.AY || "";
+  var photoUrl = data.samplePhotoUrl || data.samplePhoto || data.BI || "";
   if (photoUrl && photoUrl.indexOf("http") === 0) {
     photoHtml = 
       "<div style='text-align: center; margin: 20px 0; padding: 12px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;'>" +
