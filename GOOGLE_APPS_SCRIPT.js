@@ -180,24 +180,38 @@ function doPost(e) {
       if (photoStr.indexOf('data:image') === 0 || (photoStr.length > 500 && photoStr.indexOf('http') === -1)) {
         try {
           var saved = saveImageToDrive(photoStr, filePrefix + "_" + Date.now() + ".jpg");
-          if (saved && saved.directUrl) {
+          if (saved && saved.fileId) {
             return {
-              formula: '=HYPERLINK("' + saved.viewUrl + '", IMAGE("' + saved.directUrl + '", 4, 75, 75))',
+              formula: '=HYPERLINK("' + saved.viewUrl + '", IMAGE("' + saved.directUrl + '", 1))',
               zoomUrl: saved.viewUrl,
               directUrl: saved.directUrl
             };
           }
-        } catch (dErr) {}
+        } catch (dErr) {
+          Logger.log("formatPhotoFormula error: " + dErr.toString());
+        }
+        return null;
       }
 
       // If HTTP URL: use directly with formula
       if (photoStr.indexOf('http') === 0) {
         var match = photoStr.match(/https?:\/\/[^\s"\)]+/);
         var cleanUrl = match ? match[0] : photoStr;
+        var directUrl = cleanUrl;
+        var viewUrl = cleanUrl;
+        
+        // If Google Drive URL, use thumbnail endpoint for reliable =IMAGE() rendering in Sheets
+        var driveMatch = cleanUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || cleanUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (driveMatch && driveMatch[1]) {
+          var fId = driveMatch[1];
+          directUrl = "https://drive.google.com/thumbnail?id=" + fId + "&sz=w500";
+          viewUrl = "https://drive.google.com/file/d/" + fId + "/view";
+        }
+
         return {
-          formula: '=HYPERLINK("' + cleanUrl + '", IMAGE("' + cleanUrl + '", 4, 75, 75))',
-          zoomUrl: cleanUrl,
-          directUrl: cleanUrl
+          formula: '=HYPERLINK("' + viewUrl + '", IMAGE("' + directUrl + '", 1))',
+          zoomUrl: viewUrl,
+          directUrl: directUrl
         };
       }
 
@@ -207,7 +221,7 @@ function doPost(e) {
     // Save Designer Sample Photo to Column BI (Col 61: 1st R. Product Image) and Column AY (Col 51)
     if (samplePhoto) {
       var sampleResult = formatPhotoFormula(samplePhoto, (data.styleNo || "Sample") + "_Ref");
-      if (sampleResult) {
+      if (sampleResult && sampleResult.formula) {
         updateCell(sheet, row, "BI", sampleResult.formula);
         updateCell(sheet, row, "AY", sampleResult.formula);
         updateCell(sheet, row, "BH", sampleResult.zoomUrl || sampleResult.directUrl);
@@ -222,9 +236,6 @@ function doPost(e) {
         if (sampleResult.directUrl) {
           data.samplePhotoUrl = sampleResult.directUrl;
         }
-      } else if (String(samplePhoto).indexOf('http') === 0) {
-        updateCell(sheet, row, "BI", samplePhoto);
-        updateCell(sheet, row, "AY", samplePhoto);
       }
     }
 
@@ -237,7 +248,7 @@ function doPost(e) {
     // Round 5 -> BR (Col 70: 5th R.Model Fit Img Issues) & BD (Col 56)
     if (fitPhoto) {
       var fitResult = formatPhotoFormula(fitPhoto, (data.styleNo || "Fit") + "_R" + round);
-      if (fitResult) {
+      if (fitResult && fitResult.formula) {
         if (round === "1") {
           updateCell(sheet, row, "BJ", fitResult.formula);
           updateCell(sheet, row, "AZ", fitResult.formula);
@@ -267,9 +278,13 @@ function doPost(e) {
         var isPhotoCol = (colKey === "AY" || colKey === "AZ" || colKey === "BA" || colKey === "BB" || colKey === "BC" || colKey === "BD" || colKey === "BI" || colKey === "BJ" || colKey === "BK" || colKey === "BL" || colKey === "BM" || colKey === "BN" || colKey === "BO" || colKey === "BP" || colKey === "BQ" || colKey === "BR");
         if (isPhotoCol) {
           var pRes = formatPhotoFormula(val, (data.styleNo || "Photo") + "_" + colKey);
-          if (pRes) val = pRes.formula;
+          if (pRes && pRes.formula) {
+            updateCell(sheet, row, colKey, pRes.formula);
+            sheet.setRowHeight(row, 80);
+          }
+        } else {
+          updateCell(sheet, row, colKey, val);
         }
-        updateCell(sheet, row, colKey, val);
       }
     }
     
@@ -367,7 +382,20 @@ function updateCell(sheet, row, colName, value) {
     if (sheet.getMaxColumns() < colIndex) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), colIndex - sheet.getMaxColumns() + 5);
     }
-    sheet.getRange(row, colIndex).setValue(value);
+    var range = sheet.getRange(row, colIndex);
+    var strVal = String(value);
+    if (strVal.charAt(0) === '=') {
+      try {
+        range.setFormula(strVal);
+      } catch (fErr) {
+        range.setValue(strVal);
+      }
+    } else {
+      if (strVal.length > 49000) {
+        strVal = strVal.substring(0, 49000);
+      }
+      range.setValue(strVal);
+    }
   }
 }
 
@@ -390,6 +418,11 @@ function saveImageToDrive(base64Data, fileName) {
     
     // Strip all whitespaces, newlines, and carriage returns that break base64 decoding
     cleanBase64 = cleanBase64.replace(/\s+/g, '');
+    // Convert URL-safe base64 characters (- and _) to standard (+ and /)
+    cleanBase64 = cleanBase64.replace(/-/g, '+').replace(/_/g, '/');
+    while (cleanBase64.length % 4 !== 0) {
+      cleanBase64 += '=';
+    }
     
     var decoded = Utilities.base64Decode(cleanBase64);
     var blob = Utilities.newBlob(decoded, contentType, fileName);
@@ -399,10 +432,21 @@ function saveImageToDrive(base64Data, fileName) {
     var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
 
     var file = folder.createFile(blob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    // Safely attempt public link sharing, with fallback for restricted Google Workspace domains
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr1) {
+      try {
+        file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (shareErr2) {
+        Logger.log("Drive sharing note: " + shareErr2.toString());
+      }
+    }
 
     var fileId = file.getId();
-    var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
+    // Use official Drive thumbnail endpoint for reliable =IMAGE() rendering in Google Sheets
+    var directUrl = "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w500";
     var viewUrl = "https://drive.google.com/file/d/" + fileId + "/view";
 
     return { directUrl: directUrl, viewUrl: viewUrl, fileId: fileId };
