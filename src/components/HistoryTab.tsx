@@ -20,6 +20,7 @@ interface Submission {
   series: string;
   created_at: string;
   submitted_by: string;
+  sample_photo_url?: string;
   assignments?: { 
     id: string;
     model_name: string;
@@ -391,7 +392,14 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                               <Button variant="ghost" size="icon" className="h-6 w-6 p-0">
                                 <Plus className={`w-3 h-3 transition-transform ${expandedId === sub.id ? 'rotate-45' : ''}`} />
                               </Button>
-                              {sub.style_number}
+                              {sub.sample_photo_url && (
+                                <img 
+                                  src={sub.sample_photo_url} 
+                                  alt="Garment sample" 
+                                  className="w-7 h-7 rounded-md object-cover border border-slate-200 shrink-0 shadow-2xs" 
+                                />
+                              )}
+                              <span>{sub.style_number}</span>
                             </div>
                           </TableCell>
                           <TableCell>

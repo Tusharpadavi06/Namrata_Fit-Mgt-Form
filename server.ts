@@ -1,17 +1,75 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+  app.use(express.json({ limit: "25mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+
+  // Ensure uploads directory exists
+  const uploadsDir = path.join(process.cwd(), "public", "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  // Serve uploads statically
+  app.use("/uploads", express.static(uploadsDir));
 
   // API Route: Health Check
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // API Route: Upload and Store Photos (Sample reference & Fit attachments)
+  app.post("/api/upload-photo", (req, res) => {
+    try {
+      const { base64, fileName } = req.body;
+      if (!base64) {
+        return res.status(400).json({ success: false, error: "Base64 image data required" });
+      }
+
+      // Extract raw base64 data
+      let cleanBase64 = base64;
+      let ext = "jpg";
+      if (base64.startsWith("data:")) {
+        const matches = base64.match(/^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          ext = matches[1] === "jpeg" ? "jpg" : matches[1];
+          cleanBase64 = matches[2];
+        }
+      }
+
+      const safeName = (fileName || `photo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`)
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .replace(/\.[^/.]+$/, "");
+      const outputFilename = `${safeName}.${ext}`;
+      const filePath = path.join(uploadsDir, outputFilename);
+
+      // Write buffer to file
+      const buffer = Buffer.from(cleanBase64, "base64");
+      fs.writeFileSync(filePath, buffer);
+
+      // Construct absolute publicly accessible URL
+      const host = req.get("x-forwarded-host") || req.get("host") || "localhost:3000";
+      const proto = req.get("x-forwarded-proto") || (req.secure ? "https" : "http");
+      const photoUrl = `${proto}://${host}/uploads/${outputFilename}`;
+
+      console.log(`[API] Photo saved successfully: ${photoUrl} (${Math.round(buffer.length / 1024)} KB)`);
+
+      return res.json({
+        success: true,
+        url: photoUrl,
+        filename: outputFilename,
+        sizeKb: Math.round(buffer.length / 1024)
+      });
+    } catch (err: any) {
+      console.error("[API] Failed to upload photo:", err);
+      return res.status(500).json({ success: false, error: err.message || "Failed to save photo" });
+    }
   });
 
   // API Route: Test Google Sheets Webhook Connection

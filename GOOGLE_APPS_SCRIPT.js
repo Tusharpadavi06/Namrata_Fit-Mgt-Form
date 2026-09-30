@@ -41,7 +41,7 @@ function doPost(e) {
     }
     
     if (!ss) {
-      throw new Error("Spreadsheet not found. Please check sheetId.");
+      throw new Error("Spreadsheet not found. Please verify sheetId.");
     }
     
     // 3. Handle connection health check ping
@@ -53,14 +53,34 @@ function doPost(e) {
     if (data.type === 'SEND_MAIL') {
       return sendMail(data);
     }
+
+    // 4b. Handle explicit IMAGE UPLOAD to Google Drive
+    if (data.type === 'UPLOAD_IMAGE') {
+      var filePrefix = data.prefix || data.styleNo || "photo";
+      var saved = saveImageToDrive(data.base64, filePrefix + "_" + Date.now() + ".jpg");
+      if (saved) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: true,
+          url: saved.directUrl,
+          directUrl: saved.directUrl,
+          viewUrl: saved.viewUrl,
+          fileId: saved.fileId
+        })).setMimeType(ContentService.MimeType.JSON);
+      } else {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          error: "Failed to save image to Google Drive"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
     
     // 5. Identify Target Sheet / Tab Name
     var sheetName = data.tabName || "General";
     var sheet = getSheetWithHeaders(ss, sheetName);
     
-    // Ensure sheet has at least 60 columns before querying column 50
-    if (sheet.getMaxColumns() < 60) {
-      sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
+    // Ensure sheet has at least 75 columns
+    if (sheet.getMaxColumns() < 75) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 75 - sheet.getMaxColumns());
     }
 
     // 6. Find existing row by AX (Column 50) Assignment ID
@@ -141,16 +161,119 @@ function doPost(e) {
       updateCell(sheet, row, "AT", data.feedback || data.comments || data.AT);
     }
 
-    // 9. Also allow direct column keys if sent in payload (e.g. data["G"], data["H"], etc.)
-    var directCols = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AO","AP","AQ","AR","AS","AT","AX"];
+    // 9. Handle Photos & Attachments (Google Drive upload + Sheet IMAGE() preview)
+    var samplePhoto = data.samplePhoto || data.samplePhotoUrl || data.sample_photo_url || data.BI || data.AY;
+    var fitPhoto = data.fitPhoto || data.fitPhotoUrl || data.fit_photo_url || data.fitPhotoBase64;
+
+    // Helper: Formats photo data into Google Drive file and Sheet Formula
+    function formatPhotoFormula(photoData, filePrefix) {
+      if (!photoData) return null;
+      var photoStr = String(photoData).trim();
+      if (!photoStr) return null;
+
+      // If it is already a complete formula, return as is
+      if (photoStr.indexOf('=') === 0) {
+        return { formula: photoStr, zoomUrl: "", directUrl: "" };
+      }
+
+      // If base64 dataUrl: Save to Google Drive Style_Fit_Photos folder
+      if (photoStr.indexOf('data:image') === 0 || (photoStr.length > 500 && photoStr.indexOf('http') === -1)) {
+        try {
+          var saved = saveImageToDrive(photoStr, filePrefix + "_" + Date.now() + ".jpg");
+          if (saved && saved.directUrl) {
+            return {
+              formula: '=HYPERLINK("' + saved.viewUrl + '", IMAGE("' + saved.directUrl + '", 4, 75, 75))',
+              zoomUrl: saved.viewUrl,
+              directUrl: saved.directUrl
+            };
+          }
+        } catch (dErr) {}
+      }
+
+      // If HTTP URL: use directly with formula
+      if (photoStr.indexOf('http') === 0) {
+        var match = photoStr.match(/https?:\/\/[^\s"\)]+/);
+        var cleanUrl = match ? match[0] : photoStr;
+        return {
+          formula: '=HYPERLINK("' + cleanUrl + '", IMAGE("' + cleanUrl + '", 4, 75, 75))',
+          zoomUrl: cleanUrl,
+          directUrl: cleanUrl
+        };
+      }
+
+      return null;
+    }
+
+    // Save Designer Sample Photo to Column BI (Col 61: 1st R. Product Image) and Column AY (Col 51)
+    if (samplePhoto) {
+      var sampleResult = formatPhotoFormula(samplePhoto, (data.styleNo || "Sample") + "_Ref");
+      if (sampleResult) {
+        updateCell(sheet, row, "BI", sampleResult.formula);
+        updateCell(sheet, row, "AY", sampleResult.formula);
+        updateCell(sheet, row, "BH", sampleResult.zoomUrl || sampleResult.directUrl);
+        if (round === "1") updateCell(sheet, row, "BI", sampleResult.formula);
+        else if (round === "2") updateCell(sheet, row, "BK", sampleResult.formula);
+        else if (round === "3") updateCell(sheet, row, "BM", sampleResult.formula);
+        else if (round === "4") updateCell(sheet, row, "BO", sampleResult.formula);
+        else if (round === "5") updateCell(sheet, row, "BQ", sampleResult.formula);
+
+        sheet.setRowHeight(row, 80);
+        // Supply public URL so sendMail can embed it in email
+        if (sampleResult.directUrl) {
+          data.samplePhotoUrl = sampleResult.directUrl;
+        }
+      } else if (String(samplePhoto).indexOf('http') === 0) {
+        updateCell(sheet, row, "BI", samplePhoto);
+        updateCell(sheet, row, "AY", samplePhoto);
+      }
+    }
+
+    // Save Model Fit Photo to Round Columns:
+    // User Sheet Column Headers:
+    // Round 1 -> BJ (Col 62: 1st R.Model Fit Img Issues) & AZ (Col 52)
+    // Round 2 -> BL (Col 64: 2nd R.Model Fit Img Issues) & BA (Col 53)
+    // Round 3 -> BN (Col 66: 3rd R.Model Fit Img Issues) & BB (Col 54)
+    // Round 4 -> BP (Col 68: 4th R.Model Fit Img Issues) & BC (Col 55)
+    // Round 5 -> BR (Col 70: 5th R.Model Fit Img Issues) & BD (Col 56)
+    if (fitPhoto) {
+      var fitResult = formatPhotoFormula(fitPhoto, (data.styleNo || "Fit") + "_R" + round);
+      if (fitResult) {
+        if (round === "1") {
+          updateCell(sheet, row, "BJ", fitResult.formula);
+          updateCell(sheet, row, "AZ", fitResult.formula);
+        } else if (round === "2") {
+          updateCell(sheet, row, "BL", fitResult.formula);
+          updateCell(sheet, row, "BA", fitResult.formula);
+        } else if (round === "3") {
+          updateCell(sheet, row, "BN", fitResult.formula);
+          updateCell(sheet, row, "BB", fitResult.formula);
+        } else if (round === "4") {
+          updateCell(sheet, row, "BP", fitResult.formula);
+          updateCell(sheet, row, "BC", fitResult.formula);
+        } else if (round === "5") {
+          updateCell(sheet, row, "BR", fitResult.formula);
+          updateCell(sheet, row, "BD", fitResult.formula);
+        }
+        sheet.setRowHeight(row, 80);
+      }
+    }
+
+    // 10. Direct Column Mapping fallback
+    var directCols = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG","AH","AI","AJ","AK","AL","AM","AN","AO","AP","AQ","AR","AS","AT","AX","AY","AZ","BA","BB","BC","BD","BH","BI","BJ","BK","BL","BM","BN","BO","BP","BQ","BR"];
     for (var c = 0; c < directCols.length; c++) {
       var colKey = directCols[c];
       if (data[colKey] !== undefined && data[colKey] !== null && data[colKey] !== "") {
-        updateCell(sheet, row, colKey, data[colKey]);
+        var val = data[colKey];
+        var isPhotoCol = (colKey === "AY" || colKey === "AZ" || colKey === "BA" || colKey === "BB" || colKey === "BC" || colKey === "BD" || colKey === "BI" || colKey === "BJ" || colKey === "BK" || colKey === "BL" || colKey === "BM" || colKey === "BN" || colKey === "BO" || colKey === "BP" || colKey === "BQ" || colKey === "BR");
+        if (isPhotoCol) {
+          var pRes = formatPhotoFormula(val, (data.styleNo || "Photo") + "_" + colKey);
+          if (pRes) val = pRes.formula;
+        }
+        updateCell(sheet, row, colKey, val);
       }
     }
     
-    // 10. Send email if requested
+    // 11. Send email if requested
     if (data.triggerEmail) {
       sendMail(data);
     }
@@ -169,9 +292,9 @@ function getSheetWithHeaders(ss, sheetName) {
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
   }
-  // Ensure the sheet has at least 60 columns
-  if (sheet.getMaxColumns() < 60) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
+  // Ensure the sheet has at least 75 columns
+  if (sheet.getMaxColumns() < 75) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 75 - sheet.getMaxColumns());
   }
   if (sheet.getLastRow() === 0) {
     var headers = [
@@ -180,7 +303,27 @@ function getSheetWithHeaders(ss, sheetName) {
       "R2 Color", "R2 Fit Date", "R2 Received", "R2 Comments Date", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims", "R2 Feedback",
       "R3 Color", "R3 Fit Date", "R3 Received", "R3 Comments Date", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback",
       "R4 Color", "R4 Fit Date", "R4 Received", "R4 Comments Date", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims", "R4 Feedback",
-      "R5 Color", "R5 Fit Date", "R5 Received", "R5 Comments Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback"
+      "R5 Color", "R5 Fit Date", "R5 Received", "R5 Comments Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback",
+      "", "", "", "", // AU(47), AV(48), AW(49)
+      "Record ID", // AX (50)
+      "Sample Garment Photo", // AY (51)
+      "Reminder 1st", // AZ (52)
+      "Reminder 2nd", // BA (53)
+      "Reminder 3rd", // BB (54)
+      "Reminder 4th", // BC (55)
+      "Reminder 5th", // BD (56)
+      "", "", "", // BE(57), BF(58), BG(59)
+      "Sample Photo Zoom", // BH (60)
+      "1st R. Product Image", // BI (61)
+      "1st R.Model Fit Img Issues", // BJ (62)
+      "2nd R. Product Image", // BK (63)
+      "2nd R.Model Fit Img Issues", // BL (64)
+      "3rd R. Product Image", // BM (65)
+      "3rd R.Model Fit Img Issues", // BN (66)
+      "4th R. Product Image", // BO (67)
+      "4th R.Model Fit Img Issues", // BP (68)
+      "5th R. Product Image", // BQ (69)
+      "5th R.Model Fit Img Issues"  // BR (70)
     ];
     sheet.appendRow(headers);
     sheet.setFrozenRows(1);
@@ -193,7 +336,7 @@ function findRow(sheet, assignmentId) {
   if (!assignmentId) return -1;
   // Ensure sheet has at least 50 columns before accessing column 50 (AX)
   if (sheet.getMaxColumns() < 50) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 75 - sheet.getMaxColumns());
   }
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return -1;
@@ -208,22 +351,64 @@ function findRow(sheet, assignmentId) {
   return -1;
 }
 
+function colLetterToIndex(col) {
+  col = String(col).toUpperCase().trim();
+  var result = 0;
+  for (var i = 0; i < col.length; i++) {
+    result = result * 26 + (col.charCodeAt(i) - 64);
+  }
+  return result;
+}
+
 function updateCell(sheet, row, colName, value) {
   if (value === undefined || value === null || value === "") return;
-  var colMap = {
-    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8, "I": 9, "J": 10,
-    "K": 11, "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20,
-    "U": 21, "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26, "AA": 27, "AB": 28, "AC": 29, "AD": 30,
-    "AE": 31, "AF": 32, "AG": 33, "AH": 34, "AI": 35, "AJ": 36, "AK": 37, "AL": 38, "AM": 39, "AN": 40,
-    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AT": 46, "AX": 50
-  };
-  var colIndex = colMap[colName.toUpperCase()];
-  if (colIndex) {
-    // Ensure column exists
+  var colIndex = colLetterToIndex(colName);
+  if (colIndex > 0) {
     if (sheet.getMaxColumns() < colIndex) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), colIndex - sheet.getMaxColumns() + 5);
     }
     sheet.getRange(row, colIndex).setValue(value);
+  }
+}
+
+function saveImageToDrive(base64Data, fileName) {
+  try {
+    if (!base64Data) return null;
+    var contentType = "image/jpeg";
+    var cleanBase64 = String(base64Data).trim();
+    
+    // Check if it has data URL prefix like data:image/png;base64,...
+    var commaIdx = cleanBase64.indexOf(',');
+    if (cleanBase64.indexOf('data:') === 0 && commaIdx > -1) {
+      var header = cleanBase64.substring(5, commaIdx);
+      var semiIdx = header.indexOf(';');
+      if (semiIdx > -1) {
+        contentType = header.substring(0, semiIdx).trim() || "image/jpeg";
+      }
+      cleanBase64 = cleanBase64.substring(commaIdx + 1);
+    }
+    
+    // Strip all whitespaces, newlines, and carriage returns that break base64 decoding
+    cleanBase64 = cleanBase64.replace(/\s+/g, '');
+    
+    var decoded = Utilities.base64Decode(cleanBase64);
+    var blob = Utilities.newBlob(decoded, contentType, fileName);
+
+    var folderName = "Style_Fit_Photos";
+    var folders = DriveApp.getFoldersByName(folderName);
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+
+    var file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var fileId = file.getId();
+    var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
+    var viewUrl = "https://drive.google.com/file/d/" + fileId + "/view";
+
+    return { directUrl: directUrl, viewUrl: viewUrl, fileId: fileId };
+  } catch (err) {
+    Logger.log("saveImageToDrive error: " + err.toString());
+    return null;
   }
 }
 
@@ -238,8 +423,21 @@ function sendMail(data) {
   var styleName = data.styleNo || data.style_number || "New Sample";
   var subject = "Action Required: Fit Comments for Style " + styleName + " (Round " + round + ")";
   
+  var photoHtml = "";
+  var photoUrl = data.samplePhotoUrl || data.samplePhoto || data.AY || "";
+  if (photoUrl && photoUrl.indexOf("http") === 0) {
+    photoHtml = 
+      "<div style='text-align: center; margin: 20px 0; padding: 12px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;'>" +
+        "<p style='margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; font-weight: bold;'>Garment Sample Reference Photo</p>" +
+        "<a href='" + photoUrl + "' target='_blank'>" +
+          "<img src='" + photoUrl + "' alt='Garment Sample' style='max-width: 100%; max-height: 280px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); object-fit: contain;' />" +
+        "</a>" +
+        "<p style='margin: 8px 0 0; font-size: 11px; color: #4f46e5;'>Tap photo to view in high resolution</p>" +
+      "</div>";
+  }
+
   var buttonHtml = link ? 
-    ("<div style='text-align: center; margin: 30px 0;'>" +
+    ("<div style='text-align: center; margin: 25px 0;'>" +
       "<a href='" + link + "' style='background-color: #4338ca; color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);'>Open Feedback Form</a>" +
     "</div>" +
     "<hr style='border: 0; border-top: 1px solid #e2e8f0; margin: 25px 0;'>" +
@@ -255,10 +453,12 @@ function sendMail(data) {
       "<div style='padding: 25px; background-color: white; color: #334155; font-size: 14px; line-height: 1.6;'>" +
         "<p>Hello <strong>" + (data.modelName || "Model") + "</strong>,</p>" +
         "<p>You have a new sample fit request that requires your comments and observations:</p>" +
+        photoHtml +
         "<ul style='background: #f8fafc; padding: 15px 20px 15px 35px; border-radius: 8px; margin: 15px 0;'>" +
           "<li><strong>Sample Type:</strong> " + (data.sampleType || data.typeOfSample || "Fitting") + "</li>" +
           "<li><strong>Style No:</strong> " + styleName + "</li>" +
           "<li><strong>Size:</strong> " + (data.size || "N/A") + "</li>" +
+          "<li><strong>Color:</strong> " + (data.color || "N/A") + "</li>" +
           (data.description ? "<li><strong>Instructions:</strong> " + data.description + "</li>" : "") +
         "</ul>" +
         buttonHtml +

@@ -8,10 +8,12 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare } from 'lucide-react';
+import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, Camera, Image as ImageIcon, ZoomIn, Trash2, UploadCloud, X, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
+import { compressImage, uploadImageToStorage } from '../lib/image-utils';
 import headerBannerImg from '../assets/images/lingerie_survey_header_1785743995198.jpg';
 
 // Helper to convert DD/MM/YYYY to YYYY-MM-DD for native HTML date controls
@@ -62,6 +64,38 @@ const yyyymmddToDdmmyyyy = (dateStr: string): string => {
   return '';
 };
 
+// Helper to safely extract photo URL string from diverse possible formats (string, base64, array, object, or sheet formula)
+const extractPhotoUrl = (source: any): string => {
+  if (!source) return '';
+  if (typeof source === 'string') {
+    const trimmed = source.trim();
+    if (trimmed.length > 5) {
+      // If it contains a formula like =HYPERLINK("...", IMAGE("..."))
+      const urlMatch = trimmed.match(/https?:\/\/[^\s"\)]+/);
+      if (urlMatch) return urlMatch[0];
+      return trimmed;
+    }
+    return '';
+  }
+  if (Array.isArray(source) && source.length > 0) {
+    const first = source[0];
+    if (typeof first === 'string' && first.trim().length > 5) {
+      const urlMatch = first.match(/https?:\/\/[^\s"\)]+/);
+      return urlMatch ? urlMatch[0] : first.trim();
+    }
+    if (first && typeof first.url === 'string') return first.url.trim();
+    if (first && typeof first.dataUrl === 'string') return first.dataUrl.trim();
+    if (first && typeof first.sample_photo_url === 'string') return first.sample_photo_url.trim();
+  }
+  if (typeof source === 'object' && source !== null) {
+    if (typeof source.url === 'string' && source.url.trim().length > 5) return source.url.trim();
+    if (typeof source.dataUrl === 'string' && source.dataUrl.trim().length > 5) return source.dataUrl.trim();
+    if (typeof source.sample_photo_url === 'string' && source.sample_photo_url.trim().length > 5) return source.sample_photo_url.trim();
+    if (typeof source.fit_photo_url === 'string' && source.fit_photo_url.trim().length > 5) return source.fit_photo_url.trim();
+  }
+  return '';
+};
+
 interface ModelResponseViewProps {
   submissionId: string;
   assignmentId: string;
@@ -77,14 +111,79 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [mailing, setMailing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Form states
+  // Helper for today's date formatted as YYYY-MM-DD for native date picker
+  const getTodayYyyymmdd = () => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  // Form states - Comment Date defaults to today's date automatically
   const [receivedDate, setReceivedDate] = useState('');
-  const [commentsReceivedDate, setCommentsReceivedDate] = useState('');
+  const [commentsReceivedDate, setCommentsReceivedDate] = useState(getTodayYyyymmdd());
   const [givenForFitDate, setGivenForFitDate] = useState('');
   const [beforeWash, setBeforeWash] = useState('');
   const [afterWash, setAfterWash] = useState('');
   const [fabricTrims, setFabricTrims] = useState('');
   const [color, setColor] = useState('');
+
+  // Photos states
+  const [designerPhoto, setDesignerPhoto] = useState<string>('');
+  const [fitPhotos, setFitPhotos] = useState<{ id: string; dataUrl: string; blob?: Blob; sizeKb: number; url?: string }[]>([]);
+  const [isCompressingFit, setIsCompressingFit] = useState(false);
+  const [photoZoomUrl, setPhotoZoomUrl] = useState<string | null>(null);
+  const [photoZoomTitle, setPhotoZoomTitle] = useState<string>('');
+  const fitCameraInputRef = React.useRef<HTMLInputElement>(null);
+  const fitGalleryInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFitPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsCompressingFit(true);
+    const toastId = toast.loading("Processing & saving fit photo...");
+    try {
+      const newItems: { id: string; dataUrl: string; blob?: Blob; sizeKb: number; url?: string }[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type.startsWith('image/')) {
+          const compressed = await compressImage(file, 1200, 0.82);
+          const fileName = `fit_${assignmentId || 'fit'}_r${round}_${Date.now()}_${i}.jpg`;
+          
+          let uploadedUrl = '';
+          try {
+            const upl = await uploadImageToStorage(compressed.blob, fileName);
+            if (upl) uploadedUrl = upl;
+          } catch (e) {
+            console.warn("Storage upload fallback:", e);
+          }
+
+          newItems.push({
+            id: `fit-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+            dataUrl: compressed.dataUrl,
+            blob: compressed.blob,
+            sizeKb: compressed.sizeKb,
+            url: uploadedUrl || compressed.dataUrl
+          });
+        }
+      }
+      setFitPhotos(prev => [...prev, ...newItems]);
+      toast.success(`${newItems.length} photo(s) attached!`, { id: toastId });
+    } catch (err: any) {
+      console.error("Fit photo compression error:", err);
+      toast.error("Failed to process photo: " + (err.message || "Unknown error"), { id: toastId });
+    } finally {
+      setIsCompressingFit(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleRemoveFitPhoto = (id: string) => {
+    setFitPhotos(prev => prev.filter(p => p.id !== id));
+    toast.info("Fit photo removed");
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -283,6 +382,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                         parsedDate = cells[7];
                       }
                     }
+                    let sheetSamplePhoto = '';
+                    if (cells[60]) sheetSamplePhoto = extractPhotoUrl(cells[60]);
+                    if (!sheetSamplePhoto && cells[50]) sheetSamplePhoto = extractPhotoUrl(cells[50]);
+
                     if (!assData) {
                       assData = {
                         id: aId,
@@ -291,7 +394,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                         model_email: '',
                         color: cells[6] || '',
                         size: cells[5] || '',
-                        given_for_fit_date: parsedDate
+                        given_for_fit_date: parsedDate,
+                        sample_photo_url: sheetSamplePhoto
                       };
                     }
                     if (!subData) {
@@ -300,8 +404,12 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                         style_number: cells[3] || 'Style Sample',
                         type_of_sample: cells[2] || 'Fit Comment',
                         description: cells[4] || '',
-                        series: tab
+                        series: tab,
+                        sample_photo_url: sheetSamplePhoto
                       };
+                    }
+                    if (sheetSamplePhoto && !designerPhoto) {
+                      setDesignerPhoto(sheetSamplePhoto);
                     }
                     break;
                   }
@@ -338,10 +446,80 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         }
         
         // Ensure keys are accessible via both snake_case and camelCase
+        let resolvedDesignerPhoto = '';
         if (subData) {
           subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber || 'Style Sample';
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample || 'Fit Comment';
+          resolvedDesignerPhoto = extractPhotoUrl(subData.sample_photo_url) ||
+                                  extractPhotoUrl(subData.sample_photo) ||
+                                  extractPhotoUrl(subData.attachments);
           setSubmissionData(subData);
+        }
+        
+        if (!resolvedDesignerPhoto && assData) {
+          resolvedDesignerPhoto = extractPhotoUrl(assData.sample_photo_url) ||
+                                  extractPhotoUrl(assData.sample_photo) ||
+                                  extractPhotoUrl(assData.attachments);
+        }
+
+        // Also check URL param for sample photo if not yet found
+        if (!resolvedDesignerPhoto) {
+          const urlPhoto = new URLSearchParams(window.location.search).get('samplePhoto');
+          if (urlPhoto) {
+            resolvedDesignerPhoto = extractPhotoUrl(decodeURIComponent(urlPhoto));
+          }
+        }
+
+        // Check other submissions with matching style_number in Supabase
+        if (!resolvedDesignerPhoto && subData?.style_number) {
+          try {
+            const { data: styleMatches } = await supabase
+              .from('submissions')
+              .select('sample_photo_url, attachments')
+              .eq('style_number', subData.style_number.trim())
+              .not('sample_photo_url', 'is', null)
+              .limit(1);
+            if (styleMatches && styleMatches.length > 0) {
+              resolvedDesignerPhoto = extractPhotoUrl(styleMatches[0].sample_photo_url) || extractPhotoUrl(styleMatches[0].attachments);
+            }
+          } catch (_) {}
+        }
+
+        // Check Google Sheets for matching Assignment ID or Style Number
+        if (!resolvedDesignerPhoto) {
+          try {
+            const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
+            const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
+            for (const tab of tabs) {
+              if (resolvedDesignerPhoto) break;
+              try {
+                const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(tab)}`);
+                const text = await res.text();
+                const json = JSON.parse(text.substring(47).slice(0, -2));
+                const rows = json.table?.rows || [];
+                for (const r of rows) {
+                  const cells = (r.c || []).map((cell: any) => cell ? String(cell.v) : '');
+                  const matchAId = cells[49] === aId || cells.includes(aId);
+                  const matchStyle = subData?.style_number && cells[3] && cells[3].trim().toLowerCase() === subData.style_number.trim().toLowerCase();
+                  if (matchAId || matchStyle) {
+                    let sheetPhoto = '';
+                    if (cells[60]) sheetPhoto = extractPhotoUrl(cells[60]);
+                    if (!sheetPhoto && cells[50]) sheetPhoto = extractPhotoUrl(cells[50]);
+                    if (!sheetPhoto && cells[59]) sheetPhoto = extractPhotoUrl(cells[59]);
+                    if (sheetPhoto) {
+                      resolvedDesignerPhoto = sheetPhoto;
+                      break;
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+
+        if (resolvedDesignerPhoto) {
+          console.log("[ModelResponseView] Successfully resolved designer reference photo");
+          setDesignerPhoto(resolvedDesignerPhoto);
         }
         
         if (assData) {
@@ -443,11 +621,28 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (roundData.fabric_trims || roundData.fabricTrims) {
           setFabricTrims(roundData.fabric_trims || roundData.fabricTrims);
         }
+        if (roundData.fit_photos && Array.isArray(roundData.fit_photos) && roundData.fit_photos.length > 0) {
+          setFitPhotos(roundData.fit_photos.map((p: any, idx: number) => ({
+            id: `saved-${idx}-${Date.now()}`,
+            dataUrl: p.url || p.dataUrl || p,
+            url: p.url || p.dataUrl || p,
+            sizeKb: p.sizeKb || 0
+          })));
+        } else if (roundData.fit_photo_url) {
+          setFitPhotos([{
+            id: `saved-0-${Date.now()}`,
+            dataUrl: roundData.fit_photo_url,
+            url: roundData.fit_photo_url,
+            sizeKb: 0
+          }]);
+        }
       }
     }
     
     setReceivedDate(ddmmyyyyToYyyymmdd(loadedReceivedDate));
-    setCommentsReceivedDate(ddmmyyyyToYyyymmdd(loadedCommentsDate));
+    // Defaults to today's date automatically if no saved comments date, and user can change it
+    const convertedCommentsDate = loadedCommentsDate ? ddmmyyyyToYyyymmdd(loadedCommentsDate) : '';
+    setCommentsReceivedDate(convertedCommentsDate || getTodayYyyymmdd());
   }, [assignmentData, round]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -469,6 +664,29 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       setCompleted(true);
       toast.success('Submission Successful!');
 
+      // Process and upload fit photos if any
+      const uploadedFitPhotos: any[] = [];
+      for (let i = 0; i < fitPhotos.length; i++) {
+        const photo = fitPhotos[i];
+        let photoUrl = photo.dataUrl;
+        if (photo.blob) {
+          try {
+            const filePath = `feedback/fit_${aId}_r${round}_${i}_${Date.now()}.jpg`;
+            const upl = await uploadImageToStorage(photo.blob, filePath);
+            if (upl) photoUrl = upl;
+          } catch (e) {
+            console.warn("Storage upload note, using optimized dataUrl:", e);
+          }
+        }
+        uploadedFitPhotos.push({
+          url: photoUrl,
+          dataUrl: photoUrl,
+          sizeKb: photo.sizeKb
+        });
+      }
+
+      const primaryFitPhotoUrl = uploadedFitPhotos[0]?.url || "";
+
       // Firebase Save
       safeFirestoreWrite(async () => {
         const fbRoundKey = `round_${round}`;
@@ -481,6 +699,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             after_wash: afterWash,
             fabric_trims: fabricTrims,
             color: color || assignmentData.color || assignmentData.modelColor,
+            fit_photos: uploadedFitPhotos,
+            fit_photo_url: primaryFitPhotoUrl,
             submitted_at: serverTimestamp()
           },
           last_updated: serverTimestamp()
@@ -499,6 +719,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             after_wash: afterWash,
             fabric_trims: fabricTrims,
             color: color || assignmentData.color || assignmentData.modelColor,
+            fit_photos: uploadedFitPhotos,
+            fit_photo_url: primaryFitPhotoUrl,
             submitted_at: new Date().toISOString()
           };
           
@@ -506,12 +728,16 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           
           const { error: updErr } = await supabase
             .from('assignments')
-            .update({ [supabaseRoundKey]: roundData })
+            .update({ 
+              [supabaseRoundKey]: roundData,
+              fit_photo_url: primaryFitPhotoUrl || null,
+              attachments: uploadedFitPhotos.map(p => p.url || p.dataUrl),
+              [`round${round}_attachments`]: uploadedFitPhotos.map(p => p.url || p.dataUrl)
+            })
             .eq('id', assignmentId);
           
           if (updErr) {
             console.error("Supabase Assignment Update Error:", updErr);
-            // Don't toast error to model unless it's critical, but log it
           } else {
             console.log("Supabase Assignment Update successful");
           }
@@ -585,8 +811,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 1 (G-M)
         "G": round === "1" ? (color || assignmentData.color || "") : (assignmentData.round1?.color || assignmentData.round_1?.color || ""),
         "H": round === "1" ? (givenForFitDate || "") : (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || ""),
-        "I": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
-        "J": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "I": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "J": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
         "K": round === "1" ? (beforeWash || "") : (assignmentData.round1?.before_wash || assignmentData.round_1?.before_wash || ""),
         "L": round === "1" ? (afterWash || "") : (assignmentData.round1?.after_wash || assignmentData.round_1?.after_wash || ""),
         "M": round === "1" ? (fabricTrims || "") : (assignmentData.round1?.fabric_trims || assignmentData.round_1?.fabric_trims || ""),
@@ -594,8 +820,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 2 (O-U)
         "O": round === "2" ? (color || assignmentData.color || "") : (assignmentData.round2?.color || assignmentData.round_2?.color || ""),
         "P": round === "2" ? (givenForFitDate || "") : (assignmentData.round2?.given_for_fit_date || assignmentData.round_2?.given_for_fit_date || ""),
-        "Q": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
-        "R": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "Q": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "R": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
         "S": round === "2" ? (beforeWash || "") : (assignmentData.round2?.before_wash || assignmentData.round_2?.before_wash || ""),
         "T": round === "2" ? (afterWash || "") : (assignmentData.round2?.after_wash || assignmentData.round_2?.after_wash || ""),
         "U": round === "2" ? (fabricTrims || "") : (assignmentData.round2?.fabric_trims || assignmentData.round_2?.fabric_trims || ""),
@@ -603,8 +829,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 3 (W-AC)
         "W": round === "3" ? (color || assignmentData.color || "") : (assignmentData.round3?.color || assignmentData.round_3?.color || ""),
         "X": round === "3" ? (givenForFitDate || "") : (assignmentData.round3?.given_for_fit_date || assignmentData.round_3?.given_for_fit_date || ""),
-        "Y": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
-        "Z": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Y": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Z": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
         "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
         "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
         "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
@@ -612,8 +838,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 4 (AE-AK)
         "AE": round === "4" ? (color || assignmentData.color || "") : (assignmentData.round4?.color || (assignmentData.round_4?.color || "")),
         "AF": round === "4" ? (givenForFitDate || "") : (assignmentData.round4?.given_for_fit_date || (assignmentData.round_4?.given_for_fit_date || "")),
-        "AG": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
-        "AH": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AG": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AH": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
         "AI": round === "4" ? (beforeWash || "") : (assignmentData.round4?.before_wash || (assignmentData.round_4?.before_wash || "")),
         "AJ": round === "4" ? (afterWash || "") : (assignmentData.round4?.after_wash || (assignmentData.round_4?.after_wash || "")),
         "AK": round === "4" ? (fabricTrims || "") : (assignmentData.round4?.fabric_trims || (assignmentData.round_4?.fabric_trims || "")),
@@ -621,8 +847,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 5 (AM-AS)
         "AM": round === "5" ? (color || assignmentData.color || "") : (assignmentData.round5?.color || (assignmentData.round_5?.color || "")),
         "AN": round === "5" ? (givenForFitDate || "") : (assignmentData.round5?.given_for_fit_date || (assignmentData.round_5?.given_for_fit_date || "")),
-        "AO": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
-        "AP": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AO": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AP": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
         "AQ": round === "5" ? (beforeWash || "") : (assignmentData.round5?.before_wash || (assignmentData.round_5?.before_wash || "")),
         "AR": round === "5" ? (afterWash || "") : (assignmentData.round5?.after_wash || (assignmentData.round_5?.after_wash || "")),
         "AS": round === "5" ? (fabricTrims || "") : (assignmentData.round5?.fabric_trims || (assignmentData.round_5?.fabric_trims || "")),
@@ -649,6 +875,34 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "Round 3 Edit Link": adminEditR3Link,
         "Round 4 Edit Link": adminEditR4Link,
         "Round 5 Edit Link": adminEditR5Link,
+        samplePhoto: designerPhoto || submissionData.sample_photo_url || "",
+        samplePhotoUrl: designerPhoto || submissionData.sample_photo_url || "",
+        sample_photo_url: designerPhoto || submissionData.sample_photo_url || "",
+        samplePhotoBase64: (designerPhoto && designerPhoto.startsWith('data:image')) ? designerPhoto : "",
+        fitPhoto: primaryFitPhotoUrl,
+        fitPhotoUrl: primaryFitPhotoUrl,
+        fit_photo_url: primaryFitPhotoUrl,
+        fitPhotos: uploadedFitPhotos.map(p => p.url),
+        fitPhotoBase64: (primaryFitPhotoUrl && primaryFitPhotoUrl.startsWith('data:image')) ? primaryFitPhotoUrl : "",
+        // Designer Sample Photo: Column BI (Col 61: 1st R. Product Image in user's sheet) & Column AY (Col 51)
+        "BI": designerPhoto || submissionData.sample_photo_url || "",
+        "AY": designerPhoto || submissionData.sample_photo_url || "",
+        ...(round === "1" ? { "BI": designerPhoto || submissionData.sample_photo_url || "" } : {}),
+        ...(round === "2" ? { "BK": designerPhoto || submissionData.sample_photo_url || "" } : {}),
+        ...(round === "3" ? { "BM": designerPhoto || submissionData.sample_photo_url || "" } : {}),
+        ...(round === "4" ? { "BO": designerPhoto || submissionData.sample_photo_url || "" } : {}),
+        ...(round === "5" ? { "BQ": designerPhoto || submissionData.sample_photo_url || "" } : {}),
+        // Model Fit Photos per Round:
+        // Round 1: Column BJ (Col 62: 1st R.Model Fit Img Issues) & AZ (52)
+        // Round 2: Column BL (Col 64: 2nd R.Model Fit Img Issues) & BA (53)
+        // Round 3: Column BN (Col 66: 3rd R.Model Fit Img Issues) & BB (54)
+        // Round 4: Column BP (Col 68: 4th R.Model Fit Img Issues) & BC (55)
+        // Round 5: Column BR (Col 70: 5th R.Model Fit Img Issues) & BD (56)
+        ...(round === "1" ? { "BJ": primaryFitPhotoUrl, "AZ": primaryFitPhotoUrl } : {}),
+        ...(round === "2" ? { "BL": primaryFitPhotoUrl, "BA": primaryFitPhotoUrl } : {}),
+        ...(round === "3" ? { "BN": primaryFitPhotoUrl, "BB": primaryFitPhotoUrl } : {}),
+        ...(round === "4" ? { "BP": primaryFitPhotoUrl, "BC": primaryFitPhotoUrl } : {}),
+        ...(round === "5" ? { "BR": primaryFitPhotoUrl, "BD": primaryFitPhotoUrl } : {}),
         "AX": aId
       };
       
@@ -897,6 +1151,47 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               <p className="text-sm text-slate-600 italic">"{submissionData.description}"</p>
             </div>
           )}
+
+          {/* Designer Sample Reference Photo Section */}
+          <div className="pt-4 border-t space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs uppercase text-indigo-700 font-bold tracking-wider flex items-center gap-1.5">
+                <Camera className="w-4 h-4 text-indigo-600" /> Sample Garment Photo (From Designer)
+              </span>
+              {designerPhoto && (
+                <span className="text-[11px] text-indigo-600 font-semibold flex items-center gap-1 cursor-pointer" onClick={() => {
+                  setPhotoZoomUrl(designerPhoto);
+                  setPhotoZoomTitle(`Designer Reference Sample: ${submissionData.style_number} (${submissionData.type_of_sample})`);
+                }}>
+                  <ZoomIn className="w-3.5 h-3.5" /> Tap to zoom
+                </span>
+              )}
+            </div>
+            {designerPhoto ? (
+              <div 
+                onClick={() => {
+                  setPhotoZoomUrl(designerPhoto);
+                  setPhotoZoomTitle(`Designer Reference Sample: ${submissionData.style_number} (${submissionData.type_of_sample})`);
+                }}
+                className="relative group rounded-xl overflow-hidden border-2 border-indigo-100 bg-white cursor-pointer max-h-80 flex items-center justify-center shadow-xs hover:shadow-md hover:border-indigo-300 transition-all p-3"
+              >
+                <img 
+                  src={designerPhoto} 
+                  alt={`Sample Garment ${submissionData.style_number}`} 
+                  className="max-h-72 w-auto object-contain rounded-lg transition-transform duration-300 group-hover:scale-[1.02]"
+                />
+                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-xl">
+                  <span className="bg-white text-slate-800 text-xs font-bold px-3.5 py-2 rounded-full shadow-lg flex items-center gap-1.5 border border-slate-100">
+                    <ZoomIn className="w-4 h-4 text-indigo-600" /> Click to Zoom Full Image
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center">
+                <p className="text-xs text-slate-400 italic">(No reference photo attached by designer for this style)</p>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -904,8 +1199,15 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card className="shadow-lg border-2 border-primary/5">
           <CardHeader className="border-b bg-white">
-            <CardTitle className="text-lg">Response Form</CardTitle>
-            <CardDescription>Fill in the fitting details below</CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">Response Form (Round {round})</CardTitle>
+                <CardDescription>Fill in your fitting feedback and attach fit photos below</CardDescription>
+              </div>
+              <Badge variant="outline" className="bg-indigo-50 border-indigo-200 text-indigo-700 text-xs font-semibold px-2.5 py-1 flex items-center gap-1.5">
+                <Camera className="w-3.5 h-3.5" /> Attachments Enabled
+              </Badge>
+            </div>
           </CardHeader>
           <CardContent className="pt-6 space-y-6">
             <div className="grid md:grid-cols-2 gap-6">
@@ -938,7 +1240,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                 </div>
               )}
               <div className="space-y-2">
-                <Label className="flex items-center gap-2 text-slate-700">
+                <Label className="flex items-center gap-2 text-slate-700 font-bold">
                   <CalendarIcon className="w-4 h-4 text-primary" />
                   Sample Received Date *
                 </Label>
@@ -946,27 +1248,33 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                   type="date"
                   value={receivedDate}
                   onChange={(e) => setReceivedDate(e.target.value)}
-                  className="border-primary/20 focus:border-primary"
+                  className="border-primary/20 focus:border-primary font-medium"
                   required
                 />
               </div>
               <div className="space-y-2">
-                <Label className="flex items-center gap-2 text-slate-700">
-                  <MessageSquare className="w-4 h-4 text-primary" />
-                  Comments Received Date *
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label className="flex items-center gap-2 text-slate-700 font-bold">
+                    <MessageSquare className="w-4 h-4 text-primary" />
+                    Comment Date *
+                  </Label>
+                  <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 px-2 py-0.5 rounded-full">
+                    Auto-set to Today
+                  </span>
+                </div>
                 <Input 
                   type="date"
                   value={commentsReceivedDate}
                   onChange={(e) => setCommentsReceivedDate(e.target.value)}
-                  className="border-primary/20 focus:border-primary"
+                  className="border-primary/20 focus:border-primary font-medium bg-white"
                   required
                 />
+                <p className="text-[11px] text-slate-400">Defaults to today's date. You can change this if needed.</p>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-slate-700">Fit comments before wash *</Label>
+              <Label className="text-slate-700 font-bold">Fit comments before wash *</Label>
               <Textarea 
                 placeholder="Enter comments..." 
                 value={beforeWash}
@@ -977,7 +1285,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             </div>
 
             <div className="space-y-2">
-              <Label className="text-slate-700">Fit comments after wash *</Label>
+              <Label className="text-slate-700 font-bold">Fit comments after wash *</Label>
               <Textarea 
                 placeholder="Enter comments..." 
                 value={afterWash}
@@ -988,7 +1296,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             </div>
 
             <div className="space-y-2">
-              <Label className="text-slate-700">Comments on fabric / trims *</Label>
+              <Label className="text-slate-700 font-bold">Comments on fabric / trims *</Label>
               <Textarea 
                 placeholder="Enter comments..." 
                 value={fabricTrims}
@@ -996,6 +1304,144 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                 className="min-h-[100px] resize-none"
                 required
               />
+            </div>
+
+            {/* Model Fit Photos & Attachment Section */}
+            <div className="pt-6 border-t-2 border-slate-100 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <Camera className="w-5 h-5 text-indigo-600" />
+                    Attachment / Fit Photo Option (Round {round})
+                  </Label>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Attach photos of how the garment fits (Front, Back, Side, or any specific issue areas).
+                  </p>
+                </div>
+                <Badge variant="outline" className="bg-indigo-50 border-indigo-200 text-indigo-700 text-xs font-semibold px-2.5 py-1">
+                  Attachment Option
+                </Badge>
+              </div>
+
+              {/* Hidden file inputs for Mobile Camera and Gallery */}
+              <input
+                type="file"
+                ref={fitCameraInputRef}
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleFitPhotoSelect}
+              />
+              <input
+                type="file"
+                ref={fitGalleryInputRef}
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleFitPhotoSelect}
+              />
+
+              {/* Upload Dropzone / Button Trigger */}
+              <div 
+                className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/20 hover:bg-indigo-50/40 rounded-xl p-5 text-center transition-all cursor-pointer"
+                onClick={() => fitGalleryInputRef.current?.click()}
+              >
+                <div className="mx-auto w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <h4 className="text-sm font-semibold text-slate-800">
+                  {isCompressingFit ? "Optimizing & Attaching Photo..." : "Add Fit Photo or Attachment"}
+                </h4>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  Take a live photo from your phone camera or select from your gallery / files.
+                </p>
+
+                <div className="flex flex-wrap items-center justify-center gap-3 mt-4" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="h-10 px-4 text-xs font-semibold gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+                    onClick={() => fitCameraInputRef.current?.click()}
+                    disabled={isCompressingFit}
+                  >
+                    <Camera className="w-4 h-4" />
+                    Take Photo (Camera)
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-10 px-4 text-xs font-semibold gap-2 bg-white border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs"
+                    onClick={() => fitGalleryInputRef.current?.click()}
+                    disabled={isCompressingFit}
+                  >
+                    <ImageIcon className="w-4 h-4 text-slate-600" />
+                    Upload from Gallery / Files
+                  </Button>
+                </div>
+
+                {isCompressingFit && (
+                  <div className="flex items-center justify-center gap-2 text-xs text-indigo-600 font-semibold animate-pulse mt-3">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Optimizing photo for fast upload...
+                  </div>
+                )}
+              </div>
+
+              {/* Photos Grid when attached */}
+              {fitPhotos.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700">
+                      Attached Photos ({fitPhotos.length})
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Tap photo to zoom preview
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {fitPhotos.map((photo, idx) => (
+                      <div 
+                        key={photo.id} 
+                        className="relative group rounded-xl overflow-hidden border border-slate-200 bg-white h-36 flex items-center justify-center shadow-sm hover:shadow-md transition-all"
+                      >
+                        <img 
+                          src={photo.dataUrl} 
+                          alt={`Fit photo ${idx + 1}`} 
+                          className="h-full w-full object-cover"
+                        />
+                        <Badge className="absolute top-2 left-2 bg-black/70 text-white border-0 text-[10px] px-2 py-0.5 pointer-events-none">
+                          Attachment {idx + 1}
+                        </Badge>
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="icon"
+                            className="h-8 w-8 rounded-full bg-white/95 hover:bg-white text-slate-800"
+                            onClick={() => {
+                              setPhotoZoomUrl(photo.dataUrl);
+                              setPhotoZoomTitle(`Fit Photo Attachment ${idx + 1}`);
+                            }}
+                          >
+                            <ZoomIn className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="icon"
+                            className="h-8 w-8 rounded-full shadow-sm"
+                            onClick={() => handleRemoveFitPhoto(photo.id)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1015,6 +1461,36 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           )}
         </Button>
       </form>
+
+      {/* Lightbox / Zoom Dialog for Photos */}
+      <Dialog open={!!photoZoomUrl} onOpenChange={(open) => !open && setPhotoZoomUrl(null)}>
+        <DialogContent className="max-w-3xl p-4 sm:p-6 bg-white rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold flex items-center gap-2">
+              <Camera className="w-5 h-5 text-indigo-600" />
+              {photoZoomTitle || "Photo Zoom Preview"}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Style: {submissionData.style_number} • Round {round}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-2 flex items-center justify-center bg-slate-900 rounded-xl overflow-hidden max-h-[70vh] p-2">
+            {photoZoomUrl && (
+              <img 
+                src={photoZoomUrl} 
+                alt={photoZoomTitle || "Garment Photo"} 
+                className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
+              />
+            )}
+          </div>
+          <div className="flex justify-between items-center pt-2">
+            <span className="text-xs text-slate-400">High-Resolution View</span>
+            <Button size="sm" variant="outline" onClick={() => setPhotoZoomUrl(null)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

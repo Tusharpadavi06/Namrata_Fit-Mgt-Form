@@ -6,13 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
-import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User, Copy, ExternalLink, ShieldAlert, Globe, HelpCircle } from 'lucide-react';
+import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User, Copy, ExternalLink, ShieldAlert, Globe, HelpCircle, Camera, Image as ImageIcon, UploadCloud, ZoomIn, X, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
 import { v4 as uuidv4 } from 'uuid';
 import { isValidUuid } from '../lib/models-service';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
+import { compressImage, uploadImageToStorage } from '../lib/image-utils';
 import { db, auth, safeFirestoreWrite, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from '../lib/firebase';
 import { doc, setDoc, getDoc, getDocs, collection, query, where, serverTimestamp } from 'firebase/firestore';
 
@@ -52,6 +54,13 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [sharedColor, setSharedColor] = useState('');
   const [sharedSize, setSharedSize] = useState('');
   const [sharedFitDate, setSharedFitDate] = useState(new Date().toLocaleDateString('en-GB'));
+  const [samplePhotoUrl, setSamplePhotoUrl] = useState<string>('');
+  const [samplePhotoBlob, setSamplePhotoBlob] = useState<Blob | null>(null);
+  const [samplePhotoSizeKb, setSamplePhotoSizeKb] = useState<number>(0);
+  const [isCompressingSample, setIsCompressingSample] = useState(false);
+  const [previewPhotoModalOpen, setPreviewPhotoModalOpen] = useState(false);
+  const cameraInputRef = React.useRef<HTMLInputElement>(null);
+  const galleryInputRef = React.useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<any>(null);
@@ -116,6 +125,62 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     return `${fullHex.slice(0, 8)}-${fullHex.slice(8, 12)}-${fullHex.slice(12, 16)}-${fullHex.slice(16, 20)}-${fullHex.slice(20, 32)}`;
   };
 
+  const extractPhotoUrl = (source: any): string => {
+    if (!source) return '';
+    if (typeof source === 'string') {
+      const trimmed = source.trim();
+      if (trimmed.length > 5) {
+        const urlMatch = trimmed.match(/https?:\/\/[^\s"\)]+/);
+        if (urlMatch) return urlMatch[0];
+        return trimmed;
+      }
+      return '';
+    }
+    if (Array.isArray(source) && source.length > 0) {
+      const first = source[0];
+      if (typeof first === 'string' && first.trim().length > 5) {
+        const urlMatch = first.match(/https?:\/\/[^\s"\)]+/);
+        return urlMatch ? urlMatch[0] : first.trim();
+      }
+      if (first && typeof first.url === 'string') return first.url.trim();
+      if (first && typeof first.dataUrl === 'string') return first.dataUrl.trim();
+    }
+    return '';
+  };
+
+  const handleImageFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error("Please select an image file (JPG, PNG, WEBP)");
+      return;
+    }
+
+    setIsCompressingSample(true);
+    const toastId = toast.loading("Processing and optimizing sample photo...");
+    try {
+      const compressed = await compressImage(file, 1200, 0.82);
+      setSamplePhotoUrl(compressed.dataUrl);
+      setSamplePhotoBlob(compressed.blob);
+      setSamplePhotoSizeKb(compressed.sizeKb);
+      toast.success(`Sample photo attached! (${compressed.sizeKb} KB)`, { id: toastId });
+    } catch (err: any) {
+      console.error("Image processing error:", err);
+      toast.error("Failed to process image: " + (err.message || "Unknown error"), { id: toastId });
+    } finally {
+      setIsCompressingSample(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleRemoveSamplePhoto = () => {
+    setSamplePhotoUrl('');
+    setSamplePhotoBlob(null);
+    setSamplePhotoSizeKb(0);
+    toast.info("Sample photo removed");
+  };
+
   // Listen for Style No changes to auto-detect existing submissions
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -130,7 +195,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     const series = getSeriesFromStyleNumber(styleNo);
     const { data } = await supabase
       .from('submissions')
-      .select('id')
+      .select('id, sample_photo_url')
       .eq('style_number', styleNo.trim())
       .eq('series', series || 'General')
       .maybeSingle();
@@ -347,7 +412,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             style_number: d.style_number,
             description: d.description,
             series: d.series,
-            submitted_by: d.submitted_by
+            submitted_by: d.submitted_by,
+            sample_photo_url: d.sample_photo_url || d.sample_photo || d.attachments
           };
         }
       }
@@ -382,6 +448,10 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setTypeOfSample(finalSub.type_of_sample || '');
         setStyleNo(finalSub.style_number || '');
         setDescription(finalSub.description || '');
+        const photo = extractPhotoUrl(finalSub.sample_photo_url) || extractPhotoUrl(finalSub.sample_photo) || extractPhotoUrl(finalSub.attachments);
+        if (photo) {
+          setSamplePhotoUrl(photo);
+        }
       }
 
       if (finalAss && finalAss.length > 0) {
@@ -581,16 +651,32 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const userEmail = currentUser?.email || 'admin@fitcomment.com'; 
       const userName = currentUser?.displayName || userEmail;
 
+      // Upload sample photo to storage if a new blob was selected
+      let finalPhotoUrl = samplePhotoUrl;
+      if (samplePhotoBlob) {
+        try {
+          const filePath = `samples/sample_${submissionId}_r${currentRound}_${Date.now()}.jpg`;
+          const uploadedUrl = await uploadImageToStorage(samplePhotoBlob, filePath);
+          if (uploadedUrl) {
+            finalPhotoUrl = uploadedUrl;
+            setSamplePhotoUrl(uploadedUrl);
+          }
+        } catch (upErr) {
+          console.warn("Sample photo cloud upload note, using optimized base64:", upErr);
+        }
+      }
+
       const assignmentsWithLinks = validAssignments.map(a => {
         // Ensure the ID is deterministic based on current submission and model email
         // This forces merging in the database and Google Sheets
         const finalAId = getDeterministicId(submissionId!, a.modelEmail);
+        const photoParam = (finalPhotoUrl && finalPhotoUrl.startsWith('http')) ? `&samplePhoto=${encodeURIComponent(finalPhotoUrl)}` : '';
         
-        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1`;
-        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2`;
-        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3`;
-        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4`;
-        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5`;
+        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1${photoParam}`;
+        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2${photoParam}`;
+        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3${photoParam}`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4${photoParam}`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5${photoParam}`;
         return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
@@ -637,7 +723,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         type_of_sample: typeOfSample,
         description: description,
         series: series || 'General',
-        submitted_by: userEmail
+        submitted_by: userEmail,
+        sample_photo_url: finalPhotoUrl || null,
+        attachments: finalPhotoUrl ? [finalPhotoUrl] : null
       });
       if (subErr) {
         console.error("Supabase submission error:", subErr);
@@ -652,6 +740,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           description: description,
           series: series || 'General',
           submitted_by: userEmail,
+          sample_photo_url: finalPhotoUrl || null,
+          attachments: finalPhotoUrl ? [finalPhotoUrl] : null,
           updatedAt: serverTimestamp()
         }, { merge: true });
       });
@@ -682,6 +772,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           r4_link: a.r4Link,
           r5_link: a.r5Link,
           given_for_fit_date: a.givenForFitDate,
+          attachments: finalPhotoUrl ? [finalPhotoUrl] : null,
           // Preserve and update feedback data per round
           round1: r1 || null,
           round2: r2 || null,
@@ -817,6 +908,17 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           responseUrl: currentLink,
           tabName: series || "General",
           triggerEmail: true,
+          samplePhoto: finalPhotoUrl || "",
+          samplePhotoUrl: finalPhotoUrl || "",
+          sample_photo_url: finalPhotoUrl || "",
+          samplePhotoBase64: (finalPhotoUrl && finalPhotoUrl.startsWith('data:image')) ? finalPhotoUrl : "",
+          "BI": finalPhotoUrl || "",
+          "AY": finalPhotoUrl || "",
+          ...(currentRound === '1' ? { "BI": finalPhotoUrl || "" } : {}),
+          ...(currentRound === '2' ? { "BK": finalPhotoUrl || "" } : {}),
+          ...(currentRound === '3' ? { "BM": finalPhotoUrl || "" } : {}),
+          ...(currentRound === '4' ? { "BO": finalPhotoUrl || "" } : {}),
+          ...(currentRound === '5' ? { "BQ": finalPhotoUrl || "" } : {}),
           senderEmail: userEmail,
           senderName: userName,
           timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
@@ -833,6 +935,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         type: typeOfSample,
         style: styleNo,
         round: currentRound,
+        samplePhotoUrl: finalPhotoUrl,
         isUpdate: editMode
       });
 
@@ -843,6 +946,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setSharedColor('');
         setSharedSize('');
         setSharedFitDate(new Date().toLocaleDateString('en-GB'));
+        setSamplePhotoUrl('');
+        setSamplePhotoBlob(null);
+        setSamplePhotoSizeKb(0);
         setAssignments([]);
       }
 
@@ -1276,6 +1382,160 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           </CardContent>
         </Card>
 
+        {/* Sample Garment Photo / Attachment Card */}
+        <Card className="shadow-sm border-slate-200">
+          <CardHeader className="py-4 px-6 bg-slate-50/50 border-b flex flex-row items-center justify-between">
+            <div className="space-y-0.5">
+              <CardTitle className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                <Camera className="w-4 h-4 text-indigo-600" />
+                Sample Garment Photo / Attachment
+              </CardTitle>
+              <CardDescription className="text-xs text-slate-500">
+                Attach photo of sample garment. Models will see this reference photo in their feedback form, and it will be saved to Google Sheet & Drive.
+              </CardDescription>
+            </div>
+            {samplePhotoUrl && (
+              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 gap-1 text-[11px]">
+                <Check className="w-3 h-3" /> Attached {samplePhotoSizeKb ? `(${samplePhotoSizeKb} KB)` : ''}
+              </Badge>
+            )}
+          </CardHeader>
+          <CardContent className="p-6">
+            {/* Hidden file inputs for Camera and Gallery */}
+            <input
+              type="file"
+              ref={cameraInputRef}
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleImageFileSelect}
+            />
+            <input
+              type="file"
+              ref={galleryInputRef}
+              accept="image/*"
+              className="hidden"
+              onChange={handleImageFileSelect}
+            />
+
+            {samplePhotoUrl ? (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 rounded-xl border border-indigo-100 bg-indigo-50/20">
+                <div 
+                  onClick={() => setPreviewPhotoModalOpen(true)}
+                  className="relative group rounded-lg overflow-hidden border border-slate-200 bg-white h-28 w-28 shrink-0 cursor-pointer shadow-xs hover:shadow-md transition-all flex items-center justify-center"
+                >
+                  <img 
+                    src={samplePhotoUrl} 
+                    alt="Sample garment preview" 
+                    className="h-full w-full object-cover object-center group-hover:scale-105 transition-transform duration-200"
+                  />
+                  <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                    <ZoomIn className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="space-y-2 flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-800">Garment Sample Photo Attached</span>
+                    {samplePhotoSizeKb > 0 && (
+                      <Badge variant="secondary" className="text-[10px] bg-slate-100">
+                        {samplePhotoSizeKb} KB (Optimized)
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    This photo is ready and will be synced with this style assignment across models and Google Sheets.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs gap-1.5 bg-white hover:bg-slate-50"
+                      onClick={() => setPreviewPhotoModalOpen(true)}
+                    >
+                      <ZoomIn className="w-3.5 h-3.5 text-indigo-600" />
+                      View Full Size
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs gap-1.5 bg-white hover:bg-slate-50"
+                      onClick={() => galleryInputRef.current?.click()}
+                      disabled={isCompressingSample}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5 text-slate-600" />
+                      Replace Photo
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-xs text-destructive hover:bg-destructive/10 gap-1.5"
+                      onClick={handleRemoveSamplePhoto}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div 
+                className="border-2 border-dashed border-slate-200 hover:border-indigo-400 rounded-xl p-6 text-center transition-all bg-slate-50/50 hover:bg-indigo-50/10 cursor-pointer"
+                onClick={() => galleryInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const file = e.dataTransfer.files?.[0];
+                  if (file && file.type.startsWith('image/')) {
+                    const fakeEvent = { target: { files: [file] } } as any;
+                    handleImageFileSelect(fakeEvent);
+                  } else {
+                    toast.error("Please drop an image file");
+                  }
+                }}
+              >
+                <div className="mx-auto w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3">
+                  <UploadCloud className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-semibold text-slate-800">
+                  {isCompressingSample ? "Compressing & Optimizing Photo..." : "Add Sample Garment Photo"}
+                </h4>
+                <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                  Take a live photo of the sample garment or choose from your device. Photos are automatically compressed for high-speed loading.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3 mt-4" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="h-9 px-4 text-xs font-semibold gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+                    onClick={() => cameraInputRef.current?.click()}
+                    disabled={isCompressingSample}
+                  >
+                    <Camera className="w-4 h-4" />
+                    Take Photo (Camera)
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-4 text-xs font-semibold gap-2 bg-white border-slate-300 hover:bg-slate-50"
+                    onClick={() => galleryInputRef.current?.click()}
+                    disabled={isCompressingSample}
+                  >
+                    <ImageIcon className="w-4 h-4 text-slate-600" />
+                    Upload from Gallery / Files
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
       {/* Assignment Section - Show model selector always */}
       <div className="space-y-4 pt-2">
         <Card className="shadow-sm border-dashed border-2 bg-slate-50/30">
@@ -1347,26 +1607,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 </div>
               </CardHeader>
               <CardContent className="px-6 py-6 pt-6">
-                <div className="grid gap-6 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Date</Label>
-                      <button 
-                        type="button" 
-                        onClick={() => setAssignments(prev => prev.map(a => ({ ...a, givenForFitDate: sharedFitDate })))}
-                        className="text-[9px] font-bold text-indigo-600 hover:underline"
-                      >
-                        Apply to All
-                      </button>
-                    </div>
-                    <Input 
-                      placeholder="DD/MM/YYYY" 
-                      value={sharedFitDate} 
-                      onChange={e => setSharedFitDate(e.target.value)}
-                      className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-600 transition-all h-10 bg-transparent text-base font-medium"
-                    />
-                  </div>
-
+                <div className="grid gap-6 md:grid-cols-2">
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Color</Label>
@@ -1587,6 +1828,38 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           </Button>
         </div>
       </form>
+
+      {/* Lightbox / Full Size Zoom Dialog for Sample Photo */}
+      <Dialog open={previewPhotoModalOpen} onOpenChange={setPreviewPhotoModalOpen}>
+        <DialogContent className="max-w-3xl p-4 sm:p-6 bg-white rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold flex items-center gap-2">
+              <Camera className="w-5 h-5 text-indigo-600" />
+              Sample Garment Photo Preview
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Style: {styleNo || 'Sample'} {typeOfSample ? `• ${typeOfSample}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-2 flex items-center justify-center bg-slate-900 rounded-xl overflow-hidden max-h-[70vh] p-2">
+            {samplePhotoUrl && (
+              <img 
+                src={samplePhotoUrl} 
+                alt="Full size garment sample" 
+                className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
+              />
+            )}
+          </div>
+          <div className="flex justify-between items-center pt-2">
+            <span className="text-xs text-slate-500">
+              {samplePhotoSizeKb ? `Size: ${samplePhotoSizeKb} KB (Optimized)` : ''}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => setPreviewPhotoModalOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
