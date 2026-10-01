@@ -912,7 +912,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           samplePhotoUrl: finalPhotoUrl || "",
           sample_photo_url: finalPhotoUrl || "",
           samplePhotoBase64: (finalPhotoUrl && finalPhotoUrl.startsWith('data:image')) ? finalPhotoUrl : "",
-          "BI": finalPhotoUrl || "",
           ...(currentRound === '1' ? { "BI": finalPhotoUrl || "" } : {}),
           ...(currentRound === '2' ? { "BK": finalPhotoUrl || "" } : {}),
           ...(currentRound === '3' ? { "BM": finalPhotoUrl || "" } : {}),
@@ -1365,7 +1364,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 Style Number <span className="text-destructive ml-0.5">*</span>
               </Label>
               <Input 
-                placeholder="e.g. AT-101, LW-101, NT-101" 
+                placeholder="e.g. AT-101 (Active wear), LW-101 (LW), SW-101 (SW)" 
                 value={styleNo} 
                 onChange={e => setStyleNo(e.target.value)}
                 readOnly={editMode}

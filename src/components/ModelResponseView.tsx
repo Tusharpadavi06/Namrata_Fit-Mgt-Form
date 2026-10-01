@@ -373,7 +373,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           try {
             console.log("Checking Google Sheets as resilient fallback for assignment ID:", aId);
             const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
-            const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
+            const tabs = ['Active wear', 'Active Wear', 'LW', 'Lounge Wear', 'SW', 'Sleep Wear', 'General'];
             for (const tab of tabs) {
               if (subData && assData) break;
               try {
@@ -507,7 +507,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (!resolvedDesignerPhoto) {
           try {
             const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || '1ItCgnXRothgSUuZA4QdgLu8ElJYRg8ePpQXksvv0P_4';
-            const tabs = ['Active Wear', 'Sleep Wear', 'Lingerie', 'General'];
+            const tabs = ['Active wear', 'Active Wear', 'LW', 'Lounge Wear', 'SW', 'Sleep Wear', 'General'];
             for (const tab of tabs) {
               if (resolvedDesignerPhoto) break;
               try {
